@@ -148,5 +148,5 @@ This project leverages the power of modern Node.js, Express, TypeORM, and the op
 
 ## Database Schema (ERD)
 
-The database schema can be found in the [ERD folder](ERD/).
+The database schema can be found in the [ERD folder](ERD/multigym.png).
 
