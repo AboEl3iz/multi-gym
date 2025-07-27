@@ -126,23 +126,61 @@ TypeORM ensures structured relationships and transactional integrity.
 
 ## Getting Started
 
+## Getting Started
+
+### Option 1: Start with Docker (Recommended)
+
 1. **Clone the repository**
-2. **Install dependencies:**  
-   `npm install`
-3. **Configure environment variables:**  
-   Copy `.env.example` to `.env` and update with your DB credentials and JWT secret
-4. **Run database migrations:**  
-   `npm run typeorm migration:run`
-5. **Start the server:**  
-   `npm run dev`
-6. **Access API documentation:**  
-   Visit `http://localhost:<port>/api-docs`
+2. **Copy environment variables:**
+   ```
+   cp .env.example .env
+   ```
+   Update `.env` with your DB credentials, JWT secret, and any other required configs.
+3. **Build and start the stack:**
+   ```
+   docker-compose up --build
+   ```
+   This will launch the backend (and database, if defined in `docker-compose.yml`).
+
+4. **Run database migrations (if not automated):**
+   ```
+   docker-compose exec app npm run typeorm migration:run
+   ```
+   *(Replace `app` with your service name if different.)*
+
+5. **Access API documentation:**  
+   Visit [http://localhost:<port>/api-docs](http://localhost:<port>/api-docs)
 
 ---
 
-## Acknowledgements
+### Option 2: Manual Setup (Without Docker)
 
-This project leverages the power of modern Node.js, Express, TypeORM, and the open-source community to deliver a professional, extensible, and production-ready gym management platform.
+1. **Clone the repository**
+2. **Install dependencies:**  
+   ```
+   npm install
+   ```
+3. **Configure environment variables:**  
+   Copy `.env.example` to `.env` and update with your DB credentials and JWT secret.
+4. **Run database migrations:**  
+   ```
+   npm run typeorm migration:run
+   ```
+5. **Start the server:**  
+   ```
+   npm run dev
+   ```
+6. **Access API documentation:**  
+   Visit [http://localhost:<port>/api-docs](http://localhost:<port>/api-docs)
+
+---
+
+**Note:**  
+- Make sure Docker and Docker Compose are installed on your machine for the Docker-based setup.
+- Adjust ports and service names as needed based on your `docker-compose.yml` configuration.
+
+
+
 
 ---
 
