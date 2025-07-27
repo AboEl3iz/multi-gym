@@ -6,7 +6,7 @@ import ormconfig from './config/ormconfig';
 import routes from './routes';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
-import jwt from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';                                                                                            
 import { User } from './entities/User';
 import { ChatMessage } from './entities/ChatMessage';
 import swaggerUi from 'swagger-ui-express';

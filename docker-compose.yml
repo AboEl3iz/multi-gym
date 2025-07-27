@@ -1,0 +1,35 @@
+services:
+
+  db:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 2832003
+      POSTGRES_DB: gym
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    ports:
+      - "3001:3001"
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASS=2832003
+      - DB_NAME=gym
+      - JWT_SECRET=supersecretkey
+      - EMAIL_USER=k.hassan202077@gmail.com
+      - EMAIL_PASSWORD=your-app-password
+    command: npm run dev
