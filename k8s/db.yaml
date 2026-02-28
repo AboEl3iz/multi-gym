@@ -14,32 +14,39 @@ spec:
         app: db
     spec:
       containers:
-      - name: postgres
-        image: postgres:latest
-        ports:
-        - containerPort: 5432
-        env:
-        - name: POSTGRES_USER
-          valueFrom:
-            configMapKeyRef:
-              name: gym-config
-              key: DB_USER
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: gym-secrets
-              key: postgres-password
-        - name: POSTGRES_DB
-          valueFrom:
-            configMapKeyRef:
-              name: gym-config
-              key: DB_NAME
-        volumeMounts:
-        - name: db-storage
-          mountPath: /var/lib/postgresql/data
+        - name: postgres
+          image: postgres:17
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: gym-config
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gym-secrets
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: gym-config
+                  key: DB_NAME
+          volumeMounts:
+            - name: db-storage
+              mountPath: /var/lib/postgresql/data
       volumes:
-      - name: db-storage
-        emptyDir: {} # For testing in minikube
+        - name: db-storage
+          emptyDir: {} # For testing in minikube
 ---
 apiVersion: v1
 kind: Service
@@ -50,6 +57,6 @@ spec:
   selector:
     app: db
   ports:
-  - protocol: TCP
-    port: 5432
-    targetPort: 5432
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432

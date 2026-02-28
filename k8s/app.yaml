@@ -14,29 +14,36 @@ spec:
         app: gym-app
     spec:
       containers:
-      - name: gym-app
-        image: ghcr.io/<your-username>/gym:latest # Change this to your actual image
-        ports:
-        - containerPort: 3001
-        envFrom:
-        - configMapRef:
-            name: gym-config
-        env:
-        - name: DB_PASS
-          valueFrom:
-            secretKeyRef:
-              name: gym-secrets
-              key: postgres-password
-        - name: JWT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: gym-secrets
-              key: jwt-secret
-        - name: EMAIL_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: gym-secrets
-              key: email-password
+        - name: gym-app
+          image: aboelaiz/gym:latest
+          ports:
+            - containerPort: 3001
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          envFrom:
+            - configMapRef:
+                name: gym-config
+          env:
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: gym-secrets
+                  key: postgres-password
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gym-secrets
+                  key: jwt-secret
+            - name: EMAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gym-secrets
+                  key: email-password
 ---
 apiVersion: v1
 kind: Service
@@ -47,7 +54,7 @@ spec:
   selector:
     app: gym-app
   ports:
-  - protocol: TCP
-    port: 3001
-    targetPort: 3001
+    - protocol: TCP
+      port: 3001
+      targetPort: 3001
   type: ClusterIP
