@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gym-app
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gym-secrets
+  namespace: gym-app
+type: Opaque
+stringData:
+  postgres-password: "2832003"
+  jwt-secret: "supersecretkey"
+  email-password: "your-app-password"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gym-config
+  namespace: gym-app
+data:
+  DB_HOST: "db-service"
+  DB_PORT: "5432"
+  DB_USER: "postgres"
+  DB_NAME: "gym"
+  EMAIL_USER: "k.hassan202077@gmail.com"
