@@ -29,6 +29,10 @@ spec:
             - configMapRef:
                 name: gym-config
           env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3001"
             - name: DB_PASS
               valueFrom:
                 secretKeyRef:

@@ -1,53 +1,101 @@
 # Kubernetes (Minikube) Deployment
 
-This directory contains the necessary files to deploy the Gym Application on Minikube.
+This directory contains the files needed to deploy the Gym Application on Minikube.
 
-## Steps to Deploy
+> [!IMPORTANT]
+> **Windows + Docker Driver users**: Minikube runs inside Docker on Windows.
+> The Minikube IP (`192.168.x.x`) is **not reachable** from your Windows browser.
+> You MUST use `minikube tunnel` and point your hosts file to `127.0.0.1`.
 
-### 1. Start Minikube
-```bash
-minikube start
+---
+
+## Step-by-Step Guide
+
+### 1. Start Minikube and Enable Ingress
+```powershell
+minikube start --driver=docker
 minikube addons enable ingress
 ```
 
-### 2. Generate Self-Signed Certificate
-Run the following commands to create a self-signed certificate for `gym.local`:
+### 2. Apply Kubernetes Manifests
+```powershell
+kubectl apply -f k8s/base.yaml
+kubectl apply -f k8s/db.yaml
+kubectl apply -f k8s/app.yaml
+kubectl apply -f k8s/ingress.yaml
+```
 
+### 3. Verify All Pods Are Running
+```powershell
+kubectl get all -n gym-app
+```
+Wait until all pods show `STATUS: Running` before continuing.
+
+### 4. Generate the Self-Signed TLS Certificate
+Run in **Git Bash** or **WSL** (not PowerShell — `openssl` works best there):
 ```bash
-# Generate key and cert
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout tls.key -out tls.crt \
   -subj "/CN=gym.local/O=gym"
-
-# Create the secret in Kubernetes
+```
+Then create the Kubernetes TLS secret:
+```bash
 kubectl create secret tls gym-tls-secret \
-  --key tls.key \
-  --cert tls.crt \
+  --key tls.key --cert tls.crt \
   -n gym-app
 ```
 
-### 3. Apply Kubernetes Files
-```bash
-kubectl apply -f base.yaml
-kubectl apply -f db.yaml
-kubectl apply -f app.yaml
-kubectl apply -f ingress.yaml
+### 5. Update Your Windows Hosts File (Run as Administrator)
+Open **Notepad as Administrator** and edit:
 ```
-
-### 4. Update Hosts File
-Add the following line to your `/etc/hosts` (Linux/Mac) or `C:\Windows\System32\drivers\etc\hosts` (Windows):
-```text
-<minikube-ip> gym.local
+C:\Windows\System32\drivers\etc\hosts
 ```
-*(Get `<minikube-ip>` by running `minikube ip`)*
-
-### 5. Access the App
-Open your browser and navigate to `https://gym.local`. You will see a security warning due to the self-signed certificate; you can safely click "Advanced -> Proceed".
-
-## Note on Image
-Make sure to update the image name in `app.yaml` to point to your GHCR image or build the image locally in Minikube:
-```bash
-eval $(minikube docker-env)
-docker build -t gym:latest .
+Remove any old `192.168.x.x gym.local` entry and add this line:
 ```
-(Then update `app.yaml` to use `gym:latest` and set `imagePullPolicy: UnlessPresent`)
+127.0.0.1 gym.local
+```
+Save the file.
+
+### 6. Start Minikube Tunnel (Keep This Terminal Open)
+Open a **new PowerShell window as Administrator** and run:
+```powershell
+minikube tunnel
+```
+> This command stays running in the foreground. It routes traffic from
+> `127.0.0.1` into your Minikube cluster. Do not close this window.
+
+### 7. Access the App
+Open your browser and navigate to:
+```
+https://gym.local
+```
+You will see a browser security warning because the certificate is self-signed.
+Click **Advanced → Proceed to gym.local (unsafe)**.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `https://gym.local` shows "This site can't be reached" | Make sure `minikube tunnel` is running in a separate Admin terminal |
+| Hosts file shows `192.168.49.2` instead of `127.0.0.1` | Update hosts file (Step 5) — the old IP is not routable on Windows Docker driver |
+| Pod stuck in `Pending` or `CrashLoopBackOff` | Run `kubectl describe pod -n gym-app <pod-name>` to see the error |
+| Image pull error | Update image name in `app.yaml` to your Docker Hub image, e.g. `aboelaiz/gym:latest` |
+| `gym-tls-secret` not found | Re-run Step 4 to generate and apply the TLS secret |
+
+---
+
+## Updating Your Local Build (Minikube Docker Env)
+If you want to test local code changes without pushing to Docker Hub:
+```powershell
+# Point your shell's Docker to Minikube's internal Docker
+minikube docker-env | Invoke-Expression
+
+# Build the image directly inside Minikube
+docker build -t aboelaiz/gym:latest .
+```
+Then restart the deployment to pick up the new image:
+```powershell
+kubectl rollout restart deployment/gym-app-deployment -n gym-app
+```

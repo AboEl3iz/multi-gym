@@ -25,3 +25,4 @@ data:
   DB_USER: "postgres"
   DB_NAME: "gym"
   EMAIL_USER: "k.hassan202077@gmail.com"
+  PORT: "3001"
