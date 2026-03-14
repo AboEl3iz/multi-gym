@@ -8,14 +8,10 @@ pipeline {
         // Testing DB Variables
         DB_HOST = '127.0.0.1' // Maps to docker container port mapped on host
         DB_PORT = '5432'
-        DB_USERNAME = 'admin'
-        DB_PASSWORD = 'admin'
-        DB_NAME = 'inventory_app_test'
-        DB_TYPE = 'postgres'
-        REDIS_HOST = '127.0.0.1'
-        REDIS_PORT = '6379'
-        JWT_SECRET = 'test_jwt_secret'
-        JWT_EXPIRES_IN = '3600s'
+        DB_USER = 'postgres'
+        DB_PASS = '2832003'
+        DB_NAME = 'gym_test'
+        JWT_SECRET = 'supersecretkey'
         NODE_ENV = 'test'
     }
 
@@ -56,10 +52,9 @@ pipeline {
         stage('Test') {
             steps {
                 script {
-                    // Start PostgreSQL and Redis containers for tests
+                    // Start PostgreSQL container for tests
                     // We map ports so the host (127.0.0.1) can access them inside tests
-                    sh 'docker run -d --name test-postgres -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=admin -e POSTGRES_DB=inventory_app_test -p 5432:5432 postgres:16-alpine'
-                    sh 'docker run -d --name test-redis -p 6379:6379 redis:7-alpine'
+                    sh 'docker run -d --name test-postgres -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=2832003 -e POSTGRES_DB=gym_test -p 5432:5432 postgres:17-alpine'
                     
                     // Wait briefly for databases to initialize
                     sh 'sleep 10'
@@ -73,7 +68,6 @@ pipeline {
                     } finally {
                         // Cleanup temporary containers so they don't break subsequent builds
                         sh 'docker rm -f test-postgres || true'
-                        sh 'docker rm -f test-redis || true'
                     }
                 }
             }
@@ -101,7 +95,7 @@ pipeline {
                 script {
                     // Get short commit hash for tagging
                     def imageTag = env.GIT_COMMIT.take(7)
-                    def dockerImage = "${env.DOCKERHUB_CREDS_USR}/inventory-app"
+                    def dockerImage = "${env.DOCKERHUB_CREDS_USR}/gym"
                     
                     // Build the Docker Image
                     sh "docker build -t ${dockerImage}:${imageTag} -t ${dockerImage}:latest ."
