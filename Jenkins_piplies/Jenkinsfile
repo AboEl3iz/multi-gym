@@ -1,0 +1,119 @@
+pipeline {
+    agent any
+
+    environment {
+        // We will define environment variables used across different stages
+        NODE_VERSION = '25'
+        
+        // Testing DB Variables
+        DB_HOST = '127.0.0.1' // Maps to docker container port mapped on host
+        DB_PORT = '5432'
+        DB_USERNAME = 'admin'
+        DB_PASSWORD = 'admin'
+        DB_NAME = 'inventory_app_test'
+        DB_TYPE = 'postgres'
+        REDIS_HOST = '127.0.0.1'
+        REDIS_PORT = '6379'
+        JWT_SECRET = 'test_jwt_secret'
+        JWT_EXPIRES_IN = '3600s'
+        NODE_ENV = 'test'
+    }
+
+    stages {
+        stage('Lint') {
+            steps {
+                // Uses the NodeJS plugin configured in Jenkins
+                nodejs(nodeJSInstallationName: 'NodeJS 25') {
+                    sh 'npm ci'
+                    sh 'npm run lint'
+                }
+            }
+        }
+
+        stage('Security Scans') {
+            parallel {
+                stage('Secret Scanning (Gitleaks)') {
+                    steps {
+                        // Running Gitleaks via Docker to avoid needing it installed on the agent
+                        sh 'docker run --rm -v ${WORKSPACE}:/path zricethezav/gitleaks:latest detect --source="/path" -v || true'
+                    }
+                }
+                stage('Dependency Scanning (Trivy)') {
+                    steps {
+                        // Running Trivy via Docker
+                        sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v ${WORKSPACE}:/root aquasec/trivy:latest fs /root --severity HIGH,CRITICAL --scanners vuln,secret,config --exit-code 0'
+                    }
+                }
+                stage('SAST (njsscan)') {
+                    steps {
+                        // Running njsscan via Docker
+                        sh 'docker run --rm -v ${WORKSPACE}:/src opensecurity/njsscan:latest /src || true'
+                    }
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                script {
+                    // Start PostgreSQL and Redis containers for tests
+                    // We map ports so the host (127.0.0.1) can access them inside tests
+                    sh 'docker run -d --name test-postgres -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=admin -e POSTGRES_DB=inventory_app_test -p 5432:5432 postgres:16-alpine'
+                    sh 'docker run -d --name test-redis -p 6379:6379 redis:7-alpine'
+                    
+                    // Wait briefly for databases to initialize
+                    sh 'sleep 10'
+
+                    try {
+                        nodejs(nodeJSInstallationName: 'NodeJS 25') {
+                            sh 'npm ci'
+                            sh 'npm test -- --passWithNoTests --forceExit'
+                            sh 'npm run test:cov -- --passWithNoTests --forceExit'
+                        }
+                    } finally {
+                        // Cleanup temporary containers so they don't break subsequent builds
+                        sh 'docker rm -f test-postgres || true'
+                        sh 'docker rm -f test-redis || true'
+                    }
+                }
+            }
+            post {
+                always {
+                    // Upload coverage report artifact
+                    archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Build & Push Docker Image') {
+            // Equivalent to "on: push branches: [main, master]" + "if:" statements
+            when {
+                anyOf {
+                    branch 'master'
+                    branch 'main'
+                }
+            }
+            environment {
+                // Safely load credentials from Jenkins credential store
+                DOCKERHUB_CREDS = credentials('dockerhub-credentials')
+            }
+            steps {
+                script {
+                    // Get short commit hash for tagging
+                    def imageTag = env.GIT_COMMIT.take(7)
+                    def dockerImage = "${env.DOCKERHUB_CREDS_USR}/inventory-app"
+                    
+                    // Build the Docker Image
+                    sh "docker build -t ${dockerImage}:${imageTag} -t ${dockerImage}:latest ."
+                    
+                    // Login using the password stored in credentials
+                    sh "echo ${env.DOCKERHUB_CREDS_PSW} | docker login -u ${env.DOCKERHUB_CREDS_USR} --password-stdin"
+                    
+                    // Push BOTH tags to Docker Hub
+                    sh "docker push ${dockerImage}:${imageTag}"
+                    sh "docker push ${dockerImage}:latest"
+                }
+            }
+        }
+    }
+}
