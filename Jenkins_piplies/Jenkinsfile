@@ -79,22 +79,27 @@ pipeline {
                         // /var/jenkins_home/... path — it lives only inside the Jenkins container.
                         // Solution: download the Trivy binary and run it directly in the Jenkins
                         // shell so it scans the workspace without any volume mount.
-                        sh '''
-                            export TRIVY_DIR="$WORKSPACE_TMP/trivy-bin"
-                            mkdir -p "$TRIVY_DIR"
+                         sh '''
+            # Set up Trivy binary directory
+            export TRIVY_DIR="$WORKSPACE_TMP/trivy-bin"
+            mkdir -p "$TRIVY_DIR"
 
-                            # Download only if not already cached from a previous build
-                            if [ ! -f "$TRIVY_DIR/trivy" ]; then
-                                curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-                                    | sh -s -- -b "$TRIVY_DIR" latest
-                            fi
+            # Download Trivy if not cached
+            if [ ! -f "$TRIVY_DIR/trivy" ]; then
+                curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+                    | sh -s -- -b "$TRIVY_DIR" latest
+            fi
 
-                            "$TRIVY_DIR/trivy" fs . \
-                              --severity HIGH,CRITICAL \
-                              --scanners vuln,misconfig \
-                              --skip-dirs node_modules \
-                              --exit-code 0
-                        '''
+            # Use separate Trivy cache to avoid scanning Trivy DB
+            export TRIVY_CACHE="/tmp/trivy-cache"
+
+            # Run Trivy on the repo only, skip node_modules and Trivy's own cache
+            "$TRIVY_DIR/trivy" fs . \
+                --severity HIGH,CRITICAL \
+                --scanners vuln,misconfig \
+                --skip-dirs .cache,node_modules \
+                --exit-code 0
+        '''
                     }
                 }
 
