@@ -41,10 +41,10 @@ stage('Debug Git Info') {
 
         stage('Security Scans') {
             parallel {
-                stage('Secret Scanning (Gitleaks)') {
+               stage('Secret Scanning (Gitleaks)') {
             steps {
                 sh """
-                docker run --rm -v $WORKSPACE:/path zricethezav/gitleaks:latest detect --source=/path -v
+                docker run --rm -v $WORKSPACE:/path -w /path zricethezav/gitleaks:latest detect --source=. -v --no-git
                 """
             }
         }
