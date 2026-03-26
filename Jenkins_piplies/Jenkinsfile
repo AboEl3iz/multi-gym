@@ -24,14 +24,13 @@ pipeline {
         }
 
         // ── 2. Debug Info ─────────────────────────────────────────────────────────
+        // Verified: WORKSPACE = /var/jenkins_home/workspace/karim_karim[@N]
+        // The @N suffix is added by Jenkins when parallel builds use separate workspaces — this is normal.
         stage('Debug Info') {
             steps {
-                echo "GIT_COMMIT:     ${env.GIT_COMMIT}"
-                echo "GIT_BRANCH:     ${env.GIT_BRANCH}"
-                echo "WORKSPACE:      ${env.WORKSPACE}"
-                echo "WORKSPACE_TMP:  ${env.WORKSPACE_TMP}"
-                sh 'echo "Shell pwd:  $(pwd)"'
-                sh 'echo "Disk usage: $(du -sh . 2>/dev/null | cut -f1) — files: $(find . -maxdepth 1 | wc -l)"'
+                echo "GIT_BRANCH: ${env.GIT_BRANCH}"
+                echo "GIT_COMMIT: ${env.GIT_COMMIT}"
+                echo "WORKSPACE:  ${env.WORKSPACE}"
             }
         }
 
@@ -75,12 +74,22 @@ pipeline {
 
                 stage('Dependency Scanning (Trivy)') {
                     steps {
-                        // Confirm what Trivy will see in the mounted workspace
-                        sh 'echo "--- Workspace root ---" && ls -la "$WORKSPACE"'
+                        // Jenkins runs inside Docker (DooD). When a sibling container is spawned
+                        // with -v "$WORKSPACE":/project, the host daemon cannot resolve the
+                        // /var/jenkins_home/... path — it lives only inside the Jenkins container.
+                        // Solution: download the Trivy binary and run it directly in the Jenkins
+                        // shell so it scans the workspace without any volume mount.
                         sh '''
-                            docker run --rm \
-                              -v "$WORKSPACE":/project \
-                              aquasec/trivy:latest fs /project \
+                            export TRIVY_DIR="$WORKSPACE_TMP/trivy-bin"
+                            mkdir -p "$TRIVY_DIR"
+
+                            # Download only if not already cached from a previous build
+                            if [ ! -f "$TRIVY_DIR/trivy" ]; then
+                                curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+                                    | sh -s -- -b "$TRIVY_DIR" latest
+                            fi
+
+                            "$TRIVY_DIR/trivy" fs . \
                               --severity HIGH,CRITICAL \
                               --scanners vuln,misconfig \
                               --skip-dirs node_modules \
