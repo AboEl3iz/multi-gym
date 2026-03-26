@@ -15,7 +15,7 @@ pipeline {
         NODE_ENV    = 'test'
 
         // DB password loaded from Jenkins credentials store — never hard-code secrets
-        DB_PASS = credentials('postgres-test-password')
+        DB_PASS = 'postgres-test-password'
     }
 
     stages {
