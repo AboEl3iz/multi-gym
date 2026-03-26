@@ -23,11 +23,15 @@ pipeline {
             }
         }
 
-        // ── 2. Debug Git Info ────────────────────────────────────────────────────
-        stage('Debug Git Info') {
+        // ── 2. Debug Info ─────────────────────────────────────────────────────────
+        stage('Debug Info') {
             steps {
-                echo "GIT_COMMIT: ${env.GIT_COMMIT}"
-                echo "GIT_BRANCH: ${env.GIT_BRANCH}"
+                echo "GIT_COMMIT:     ${env.GIT_COMMIT}"
+                echo "GIT_BRANCH:     ${env.GIT_BRANCH}"
+                echo "WORKSPACE:      ${env.WORKSPACE}"
+                echo "WORKSPACE_TMP:  ${env.WORKSPACE_TMP}"
+                sh 'echo "Shell pwd:  $(pwd)"'
+                sh 'echo "Disk usage: $(du -sh . 2>/dev/null | cut -f1) — files: $(find . -maxdepth 1 | wc -l)"'
             }
         }
 
@@ -50,16 +54,13 @@ pipeline {
         }
 
         // ── 5. Security Scans (parallel) ─────────────────────────────────────────
-        // All three sub-stages are INFORMATIONAL only — they will never block or
-        // interrupt the rest of the pipeline, regardless of what they find.
+        
         stage('Security Scans') {
             parallel {
 
                 stage('Secret Scanning (Gitleaks)') {
                     steps {
-                        // --exit-code 0  → findings are printed but do NOT fail the stage
-                        // --no-git       → scan all files, not only git-tracked ones
-                        // .gitleaksignore excludes Trivy's .cache dir (false positives)
+                        
                         sh '''
                             docker run --rm \
                               -v "$WORKSPACE":/path \
@@ -74,13 +75,13 @@ pipeline {
 
                 stage('Dependency Scanning (Trivy)') {
                     steps {
-                        // --exit-code 0 → informational; never fails the pipeline
+                        
                         sh '''
                             docker run --rm \
                               -v "$WORKSPACE":/project \
                               aquasec/trivy:latest fs /project \
                               --severity HIGH,CRITICAL \
-                              --scanners vuln,secret,misconfig \
+                              --scanners vuln,misconfig \
                               --exit-code 0
                         '''
                     }
@@ -88,7 +89,6 @@ pipeline {
 
                 stage('SAST (njsscan)') {
                     steps {
-                        // || true → SAST findings are informational; never block the pipeline
                         sh '''
                             docker run --rm \
                               -v "$WORKSPACE":/src \
@@ -124,11 +124,7 @@ pipeline {
                     }
                 }
             }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
-                }
-            }
+           
         }
 
         // ── 7. Build & Push Docker Image ─────────────────────────────────────────
