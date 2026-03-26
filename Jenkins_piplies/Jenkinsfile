@@ -51,14 +51,13 @@ stage('Debug Git Info') {
         stage('Dependency Scanning (Trivy)') {
             steps {
                 sh """
-                docker run --rm \
-                  -v /var/run/docker.sock:/var/run/docker.sock \
-                  -v $WORKSPACE:/root \
-                  aquasec/trivy:latest fs /root \
-                  --severity HIGH,CRITICAL \
-                  --scanners vuln,secret,misconfig \
-                  --exit-code 0
-                """
+docker run --rm \
+  -v $WORKSPACE:/project \
+  aquasec/trivy:latest fs /project \
+  --severity HIGH,CRITICAL \
+  --scanners vuln,secret,misconfig \
+  --exit-code 0
+"""
             }
         }
         stage('SAST (njsscan)') {
