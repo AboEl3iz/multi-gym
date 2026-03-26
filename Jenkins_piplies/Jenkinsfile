@@ -82,13 +82,10 @@ pipeline {
         stage('Build & Push Docker Image') {
             // Equivalent to "on: push branches: [main, master]" + "if:" statements
             when {
-                anyOf {
-                    branch 'master'
-                    branch 'main'
-                    branch 'origin/master'
-                    branch 'origin/main'
-                }
-            }
+    expression {
+        return env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'origin/master'
+    }
+}
             environment {
                 // Safely load credentials from Jenkins credential store
                 DOCKERHUB_CREDS = credentials('dockerhub-credentials')
