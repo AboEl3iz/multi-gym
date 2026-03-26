@@ -2,133 +2,187 @@ pipeline {
     agent any
 
     environment {
-        // We will define environment variables used across different stages
+        // Node.js version — must match the installation name configured in Jenkins > Tools
         NODE_VERSION = '25'
-        
-        // Testing DB Variables
-        DB_HOST = '127.0.0.1' // Maps to docker container port mapped on host
-        DB_PORT = '5432'
-        DB_USER = 'postgres'
-        DB_PASS = '2832003'
-        DB_NAME = 'gym_test'
-        JWT_SECRET = 'supersecretkey'
-        NODE_ENV = 'test'
+
+        // ─── Test Database Variables ────────────────────────────────────────────
+        // DB_HOST points to the host-mapped port of the temporary test container
+        DB_HOST     = '127.0.0.1'
+        DB_PORT     = '5432'
+        DB_USER     = 'postgres'
+        DB_NAME     = 'gym_test'
+        JWT_SECRET  = 'supersecretkey'
+        NODE_ENV    = 'test'
+
+        // DB password loaded from Jenkins credentials store — never hard-code secrets
+        DB_PASS = credentials('postgres-test-password')
     }
 
     stages {
-       stage('Checkout') {
-    steps {
-        checkout scm
-    }
-}
 
-stage('Debug Git Info') {
-    steps {
-        echo "GIT_COMMIT: ${env.GIT_COMMIT}"
-        echo "GIT_BRANCH: ${env.GIT_BRANCH}"
-    }
-}
-
-        stage('Lint') {
+        // ── 1. Checkout ──────────────────────────────────────────────────────────
+        stage('Checkout') {
             steps {
-                // Uses the NodeJS plugin configured in Jenkins
+                checkout scm
+            }
+        }
+
+        // ── 2. Debug Git Info ────────────────────────────────────────────────────
+        // Useful for troubleshooting branch/commit detection in the pipeline
+        stage('Debug Git Info') {
+            steps {
+                echo "GIT_COMMIT: ${env.GIT_COMMIT}"
+                echo "GIT_BRANCH: ${env.GIT_BRANCH}"
+            }
+        }
+
+        // ── 3. Install Dependencies ──────────────────────────────────────────────
+        // Run npm ci once here so all subsequent stages can reuse node_modules
+        stage('Install Dependencies') {
+            steps {
                 nodejs(nodeJSInstallationName: 'NodeJS 25') {
                     sh 'npm ci'
+                }
+            }
+        }
+
+        // ── 4. Lint ──────────────────────────────────────────────────────────────
+        stage('Lint') {
+            steps {
+                nodejs(nodeJSInstallationName: 'NodeJS 25') {
                     sh 'npm run lint'
                 }
             }
         }
 
+        // ── 5. Security Scans (parallel) ─────────────────────────────────────────
         stage('Security Scans') {
             parallel {
-               stage('Secret Scanning (Gitleaks)') {
-            steps {
-                sh """
-                docker run --rm -v $WORKSPACE:/path -w /path zricethezav/gitleaks:latest detect --source=. -v --no-git
-                """
-            }
-        }
-        stage('Dependency Scanning (Trivy)') {
-            steps {
-                sh """
-docker run --rm \
-  -v $WORKSPACE:/project \
-  aquasec/trivy:latest fs /project \
-  --severity HIGH,CRITICAL \
-  --scanners vuln,secret,misconfig \
-  --exit-code 0
-"""
-            }
-        }
-        stage('SAST (njsscan)') {
-            steps {
-                sh """
-                docker run --rm -v $WORKSPACE:/src opensecurity/njsscan:latest /src
-                """
-            }
-        }
-    
+
+                // Detect hardcoded secrets in source files
+                stage('Secret Scanning (Gitleaks)') {
+                    steps {
+                        sh """
+                            docker run --rm \
+                              -v ${WORKSPACE}:/path \
+                              -w /path \
+                              zricethezav/gitleaks:latest detect --source=. -v --no-git
+                        """
+                    }
+                }
+
+                // Scan npm dependencies and project files for known vulnerabilities
+                stage('Dependency Scanning (Trivy)') {
+                    steps {
+                        sh """
+                            docker run --rm \
+                              -v ${WORKSPACE}:/project \
+                              aquasec/trivy:latest fs /project \
+                              --severity HIGH,CRITICAL \
+                              --scanners vuln,secret,misconfig \
+                              --exit-code 0
+                        """
+                    }
+                }
+
+                // Static Application Security Testing for Node.js code
+                stage('SAST (njsscan)') {
+                    steps {
+                        sh """
+                            docker run --rm \
+                              -v ${WORKSPACE}:/src \
+                              opensecurity/njsscan:latest /src
+                        """
+                    }
+                }
             }
         }
 
+        // ── 6. Test ──────────────────────────────────────────────────────────────
         stage('Test') {
             steps {
                 script {
-                    // Start PostgreSQL container for tests
-                    // We map ports so the host (127.0.0.1) can access them inside tests
-                    sh 'docker run -d --name test-postgres -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=2832003 -e POSTGRES_DB=gym_test -p 5432:5432 postgres:17-alpine'
-                    
-                    // Wait briefly for databases to initialize
+                    // Spin up a temporary PostgreSQL container for integration tests.
+                    // Password is injected from the Jenkins credential bound above.
+                    sh """
+                        docker run -d \
+                          --name test-postgres \
+                          -e POSTGRES_USER=${DB_USER} \
+                          -e POSTGRES_PASSWORD=${DB_PASS} \
+                          -e POSTGRES_DB=${DB_NAME} \
+                          -p 5432:5432 \
+                          postgres:17-alpine
+                    """
+
+                    // Give PostgreSQL enough time to finish initializing
                     sh 'sleep 10'
 
                     try {
                         nodejs(nodeJSInstallationName: 'NodeJS 25') {
-                            sh 'npm ci'
-                            sh 'npm test -- --passWithNoTests --forceExit'
+                            // Run tests WITH coverage in one pass to avoid running the
+                            // suite twice. --passWithNoTests keeps the build green when
+                            // no test files exist yet. --forceExit prevents Jest from
+                            // hanging after async operations complete.
                             sh 'npm run test:cov -- --passWithNoTests --forceExit'
                         }
                     } finally {
-                        // Cleanup temporary containers so they don't break subsequent builds
+                        // Always remove the test container so the next build starts clean
                         sh 'docker rm -f test-postgres || true'
                     }
                 }
             }
             post {
                 always {
-                    // Upload coverage report artifact
+                    // Archive the coverage report so it is accessible from the Jenkins UI
                     archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
                 }
             }
         }
 
+        // ── 7. Build & Push Docker Image ─────────────────────────────────────────
+        // Only runs when the build is triggered by a push to main / master
         stage('Build & Push Docker Image') {
-            // Equivalent to "on: push branches: [main, master]" + "if:" statements
             when {
                 expression {
                     return env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'origin/master'
                 }
-                }
+            }
             environment {
-                // Safely load credentials from Jenkins credential store
+                // Binds DOCKERHUB_CREDS_USR and DOCKERHUB_CREDS_PSW automatically
                 DOCKERHUB_CREDS = credentials('dockerhub-credentials')
             }
             steps {
                 script {
-                    // Get short commit hash for tagging
-                    def imageTag = env.GIT_COMMIT.take(7)
+                    // Tag the image with the short commit hash for traceability,
+                    // and also with :latest for convenience
+                    def imageTag   = env.GIT_COMMIT.take(7)
                     def dockerImage = "${env.DOCKERHUB_CREDS_USR}/gym"
-                    
-                    // Build the Docker Image
+
                     sh "docker build -t ${dockerImage}:${imageTag} -t ${dockerImage}:latest ."
-                    
-                    // Login using the password stored in credentials
+
+                    // Pipe the password via stdin — never pass credentials as CLI args
                     sh "echo ${env.DOCKERHUB_CREDS_PSW} | docker login -u ${env.DOCKERHUB_CREDS_USR} --password-stdin"
-                    
-                    // Push BOTH tags to Docker Hub
+
                     sh "docker push ${dockerImage}:${imageTag}"
                     sh "docker push ${dockerImage}:latest"
+
+                    // Always log out after pushing to prevent credential leakage
+                    sh 'docker logout'
                 }
             }
+        }
+    }
+
+    // ── Global post actions ───────────────────────────────────────────────────────
+    post {
+        failure {
+            // Notify the team whenever any stage fails
+            echo "Pipeline FAILED on branch ${env.GIT_BRANCH} at commit ${env.GIT_COMMIT}"
+            // Replace the echo above with a real notification step, e.g.:
+            // mail to: 'team@example.com', subject: "Build failed: ${env.JOB_NAME}"
+        }
+        success {
+            echo "Pipeline completed successfully for ${env.GIT_BRANCH}"
         }
     }
 }
