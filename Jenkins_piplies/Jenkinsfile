@@ -75,13 +75,15 @@ pipeline {
 
                 stage('Dependency Scanning (Trivy)') {
                     steps {
-                        
+                        // Confirm what Trivy will see in the mounted workspace
+                        sh 'echo "--- Workspace root ---" && ls -la "$WORKSPACE"'
                         sh '''
                             docker run --rm \
                               -v "$WORKSPACE":/project \
                               aquasec/trivy:latest fs /project \
                               --severity HIGH,CRITICAL \
                               --scanners vuln,misconfig \
+                              --skip-dirs node_modules \
                               --exit-code 0
                         '''
                     }
