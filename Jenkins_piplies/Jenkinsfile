@@ -16,6 +16,12 @@ pipeline {
     }
 
     stages {
+        stage('Checkout') {
+    steps {
+        checkout scm
+    }
+}
+
         stage('Lint') {
             steps {
                 // Uses the NodeJS plugin configured in Jenkins
