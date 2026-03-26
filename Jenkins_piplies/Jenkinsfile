@@ -16,15 +16,16 @@ pipeline {
     }
 
     stages {
-        stage('Debug Git Info') {
+       stage('Checkout') {
+    steps {
+        checkout scm
+    }
+}
+
+stage('Debug Git Info') {
     steps {
         echo "GIT_COMMIT: ${env.GIT_COMMIT}"
         echo "GIT_BRANCH: ${env.GIT_BRANCH}"
-    }
-}
-        stage('Checkout') {
-    steps {
-        checkout scm
     }
 }
 
