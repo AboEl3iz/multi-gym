@@ -29,23 +29,33 @@ pipeline {
         stage('Security Scans') {
             parallel {
                 stage('Secret Scanning (Gitleaks)') {
-                    steps {
-                        // Running Gitleaks via Docker to avoid needing it installed on the agent
-                        sh "docker run --rm -v ${WORKSPACE}:/path zricethezav/gitleaks:latest detect --source=\"/path\" -v || true"
-                    }
-                }
-                stage('Dependency Scanning (Trivy)') {
-                    steps {
-                        // Running Trivy via Docker
-                        sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v ${WORKSPACE}:/root aquasec/trivy:latest fs /root --severity HIGH,CRITICAL --scanners vuln,secret,config --exit-code 0"
-                    }
-                }
-                stage('SAST (njsscan)') {
-                    steps {
-                        // Running njsscan via Docker
-                        sh "docker run --rm -v ${WORKSPACE}:/src opensecurity/njsscan:latest /src || true"
-                    }
-                }
+            steps {
+                sh """
+                docker run --rm -v $WORKSPACE:/path zricethezav/gitleaks:latest detect --source=/path -v
+                """
+            }
+        }
+        stage('Dependency Scanning (Trivy)') {
+            steps {
+                sh """
+                docker run --rm \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  -v $WORKSPACE:/root \
+                  aquasec/trivy:latest fs /root \
+                  --severity HIGH,CRITICAL \
+                  --scanners vuln,secret,misconfig \
+                  --exit-code 0
+                """
+            }
+        }
+        stage('SAST (njsscan)') {
+            steps {
+                sh """
+                docker run --rm -v $WORKSPACE:/src opensecurity/njsscan:latest /src
+                """
+            }
+        }
+    }
             }
         }
 
