@@ -59,13 +59,16 @@ pipeline {
 
                 stage('Secret Scanning (Gitleaks)') {
                     steps {
+                        
                         sh '''
                             docker run --rm \
                               -v "$WORKSPACE":/path \
                               -w /path \
                               zricethezav/gitleaks:latest detect \
-                                --source=. -v \
-                                --exit-code 0 || true
+                                --source=. -v --no-git \
+                                --exit-code 0 \
+                                --gitleaks-ignore-path=.cache || true
+                                
                         '''
                     }
                 }
@@ -77,7 +80,8 @@ pipeline {
                         // /var/jenkins_home/... path — it lives only inside the Jenkins container.
                         // Solution: download the Trivy binary and run it directly in the Jenkins
                         // shell so it scans the workspace without any volume mount.
-                         sh '''
+                        retry(3) {
+                             sh '''
             # Set up Trivy binary directory
             export TRIVY_DIR="$WORKSPACE_TMP/trivy-bin"
             mkdir -p "$TRIVY_DIR"
@@ -89,7 +93,7 @@ pipeline {
             fi
 
             # Use separate Trivy cache to avoid scanning Trivy DB
-            export TRIVY_CACHE_DIR="/tmp/trivy-cache"
+            export TRIVY_CACHE="/tmp/trivy-cache"
 
             # Run Trivy on the repo only, skip node_modules and Trivy's own cache
             "$TRIVY_DIR/trivy" fs . \
@@ -98,6 +102,7 @@ pipeline {
                 --skip-dirs .cache,node_modules \
                 --exit-code 0
         '''
+                        }
                     }
                 }
 
@@ -208,7 +213,7 @@ def collectLogsAndArtifacts() {
     archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
     
     // Attempt to save basic build info or logs if needed
-    sh 'echo "Pipeline run info: Branch -> ${env.GIT_BRANCH}, Commit -> ${env.GIT_COMMIT}" > pipeline_summary.log'
+    sh "echo 'Pipeline run info: Branch -> ${env.GIT_BRANCH}, Commit -> ${env.GIT_COMMIT}' > pipeline_summary.log"
     archiveArtifacts artifacts: 'pipeline_summary.log', allowEmptyArchive: true
 }
 
