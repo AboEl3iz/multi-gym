@@ -100,7 +100,8 @@ pipeline {
                 --severity HIGH,CRITICAL \
                 --scanners vuln,misconfig \
                 --skip-dirs .cache,node_modules \
-                --exit-code 0
+                --exit-code 0 > trivy-report.txt || true
+            cat trivy-report.txt
         '''
                         }
                     }
@@ -111,7 +112,8 @@ pipeline {
                         sh '''
                             docker run --rm \
                               -v "$WORKSPACE":/src \
-                              opensecurity/njsscan:latest /src || true
+                              opensecurity/njsscan:latest /src > njsscan-report.txt || true
+                            cat njsscan-report.txt || true
                         '''
                     }
                 }
@@ -209,12 +211,11 @@ pipeline {
 def collectLogsAndArtifacts() {
     echo "Collecting logs and artifacts..."
     
-    // Archive test coverage reports and any other generated artifacts
     archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
     
-    // Attempt to save basic build info or logs if needed
     sh "echo 'Pipeline run info: Branch -> ${env.GIT_BRANCH}, Commit -> ${env.GIT_COMMIT}' > pipeline_summary.log"
     archiveArtifacts artifacts: 'pipeline_summary.log', allowEmptyArchive: true
+    archiveArtifacts artifacts: '*-report.txt', allowEmptyArchive: true
 }
 
 /**
@@ -222,6 +223,17 @@ def collectLogsAndArtifacts() {
  */
 def sendNotification(String buildStatus) {
     def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+    
+    def trivyReport = fileExists('trivy-report.txt') ? readFile('trivy-report.txt') : 'Trivy report not generated or not found.'
+    def njsscanReport = fileExists('njsscan-report.txt') ? readFile('njsscan-report.txt') : 'njsscan report not generated or not found.'
+    
+    // Truncate logs if they are too large to keep the email readable
+    if (trivyReport.length() > 5000) { trivyReport = trivyReport.substring(0, 5000) + '\\n... [Report Truncated]' }
+    if (njsscanReport.length() > 5000) { njsscanReport = njsscanReport.substring(0, 5000) + '\\n... [Report Truncated]' }
+    
+    // HTML escape to avoid messing up the email layout
+    trivyReport = trivyReport.replace('<', '&lt;').replace('>', '&gt;')
+    njsscanReport = njsscanReport.replace('<', '&lt;').replace('>', '&gt;')
     
     def body = """
         <h2>Jenkins Build Notification</h2>
@@ -231,6 +243,12 @@ def sendNotification(String buildStatus) {
         <p><b>Branch:</b> ${env.GIT_BRANCH}</p>
         <p><b>Commit:</b> ${env.GIT_COMMIT}</p>
         <p><b>Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+        
+        <h3>Trivy Security Scan Summary</h3>
+        <pre style="background: #f4f4f4; padding: 10px; border-radius: 5px; overflow-x: auto;">${trivyReport}</pre>
+        
+        <h3>njsscan SAST Summary</h3>
+        <pre style="background: #f4f4f4; padding: 10px; border-radius: 5px; overflow-x: auto;">${njsscanReport}</pre>
     """
 
     emailext(
