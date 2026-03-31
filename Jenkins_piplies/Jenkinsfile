@@ -59,16 +59,13 @@ pipeline {
 
                 stage('Secret Scanning (Gitleaks)') {
                     steps {
-                        
                         sh '''
                             docker run --rm \
                               -v "$WORKSPACE":/path \
                               -w /path \
                               zricethezav/gitleaks:latest detect \
-                                --source=. -v --no-git \
-                                --exit-code 0 \
-                                --gitleaks-ignore-path=.cache || true
-                                
+                                --source=. -v \
+                                --exit-code 0 || true
                         '''
                     }
                 }
@@ -92,7 +89,7 @@ pipeline {
             fi
 
             # Use separate Trivy cache to avoid scanning Trivy DB
-            export TRIVY_CACHE="/tmp/trivy-cache"
+            export TRIVY_CACHE_DIR="/tmp/trivy-cache"
 
             # Run Trivy on the repo only, skip node_modules and Trivy's own cache
             "$TRIVY_DIR/trivy" fs . \
