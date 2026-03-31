@@ -237,7 +237,7 @@ def sendNotification(String buildStatus) {
         subject: subject,
         body: body,
         mimeType: 'text/html',
-        to: 'your-email@gmail.com',
+        to: 'kimo@gmail.com',
         attachLog: true
     )
 
