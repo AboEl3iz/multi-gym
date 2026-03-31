@@ -68,6 +68,7 @@ pipeline {
                                 --source=. -v --no-git \
                                 --exit-code 0 \
                                 --gitleaks-ignore-path=.cache || true
+                                
                         '''
                     }
                 }
@@ -172,11 +173,71 @@ pipeline {
     }
 
     post {
-        failure {
-            echo "Pipeline FAILED on branch ${env.GIT_BRANCH} at commit ${env.GIT_COMMIT}"
+        always {
+            script {
+                collectLogsAndArtifacts()
+            }
         }
         success {
             echo "Pipeline completed successfully for ${env.GIT_BRANCH}"
+            script {
+                sendNotification('SUCCESS')
+            }
+        }
+        failure {
+            echo "Pipeline FAILED on branch ${env.GIT_BRANCH} at commit ${env.GIT_COMMIT}"
+            script {
+                sendNotification('FAILURE')
+            }
+        }
+        aborted {
+            echo "Pipeline ABORTED on branch ${env.GIT_BRANCH} at commit ${env.GIT_COMMIT}"
+            script {
+                sendNotification('ABORTED')
+            }
         }
     }
+}
+
+// ── Helper Functions ───────────────────────────────────────────────────────
+
+/**
+ * Collects and archives logs and build artifacts.
+ */
+def collectLogsAndArtifacts() {
+    echo "Collecting logs and artifacts..."
+    
+    // Archive test coverage reports and any other generated artifacts
+    archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+    
+    // Attempt to save basic build info or logs if needed
+    sh 'echo "Pipeline run info: Branch -> ${env.GIT_BRANCH}, Commit -> ${env.GIT_COMMIT}" > pipeline_summary.log'
+    archiveArtifacts artifacts: 'pipeline_summary.log', allowEmptyArchive: true
+}
+
+/**
+ * Sends notifications to common channels (e.g., Slack, Email) based on build status.
+ */
+def sendNotification(String buildStatus) {
+    def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+    
+    def body = """
+        <h2>Jenkins Build Notification</h2>
+        <p><b>Status:</b> ${buildStatus}</p>
+        <p><b>Job:</b> ${env.JOB_NAME}</p>
+        <p><b>Build Number:</b> ${env.BUILD_NUMBER}</p>
+        <p><b>Branch:</b> ${env.GIT_BRANCH}</p>
+        <p><b>Commit:</b> ${env.GIT_COMMIT}</p>
+        <p><b>Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+    """
+
+    emailext(
+        subject: subject,
+        body: body,
+        mimeType: 'text/html',
+        to: 'your-email@gmail.com',
+        attachLog: true
+    )
+
+    echo "Email sent for status ${buildStatus}"
 }
