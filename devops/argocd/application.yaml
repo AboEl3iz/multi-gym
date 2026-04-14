@@ -20,7 +20,7 @@ spec:
   # The CD pipeline (Jenkinsfile.cd stage 3e) patches helm/gym/values.yaml
   # and pushes to main, which ArgoCD detects and syncs automatically.
   source:
-    repoURL: https://github.com/AboEl3iz/gym.git    # ← replace with your repo
+    repoURL: https://github.com/AboEl3iz/multi-gym.git   # ← replace with your repo
     targetRevision: main                              # GitOps branch
     path: helm/gym                                    # Helm chart directory
     helm:
