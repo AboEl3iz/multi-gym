@@ -1,0 +1,65 @@
+# ════════════════════════════════════════════════════════════════════════════
+#  values-local.yaml — Minikube / kind overrides
+#  Usage: helm install gym ./helm/gym -f helm/gym/values-local.yaml \
+#           --set secrets.postgresPassword=test \
+#           --set secrets.jwtSecret=test \
+#           --set secrets.emailPassword=test
+#
+#  Changes from production defaults:
+#    • service.type NodePort (no LoadBalancer needed on Minikube)
+#    • ingress disabled  (use `minikube service` or kubectl port-forward)
+#    • hpa disabled      (metrics-server may not be installed)
+#    • pdb.minAvailable 0 (single replica is fine for local dev)
+#    • db.storage.emptyDir true (no persistent volumes needed locally)
+#    • Lower resource requests so it runs on a 4-CPU/8GB Minikube node
+#    • replicaCount 1    (saves resources)
+#    • readOnlyRootFilesystem: false (easier local debugging)
+# ════════════════════════════════════════════════════════════════════════════
+
+app:
+  replicaCount: 1
+
+  image:
+    pullPolicy: IfNotPresent   # use locally built images; don't hit the registry
+
+  service:
+    type: NodePort
+    nodePort: 30001            # fixed port for easy `minikube service gym-app-service`
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+  securityContext:
+    readOnlyRootFilesystem: false    # easier debugging locally
+
+db:
+  storage:
+    emptyDir: true
+    pvc:
+      enabled: false
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "300m"
+
+ingress:
+  enabled: false     # use `kubectl port-forward svc/gym-app-service 3001:3001`
+
+hpa:
+  enabled: false     # metrics-server not always available on Minikube
+
+pdb:
+  minAvailable: 0    # single replica allowed during local development
+
+monitoring:
+  serviceMonitor:
+    enabled: false   # only enable if you install kube-prometheus-stack locally

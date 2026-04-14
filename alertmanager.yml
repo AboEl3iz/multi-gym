@@ -1,0 +1,108 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  Alertmanager Configuration — Stage 6
+#
+#  Routing tree:
+#    All alerts → group by alertname + namespace
+#    critical   → #incidents  (immediate, no inhibit)
+#    warning    → #alerts     (5 min grouping)
+#    info       → #monitoring (low-noise channel)
+#
+#  Replace the Slack webhook URL with your real Incoming Webhook URL.
+#  In production: mount this from a Kubernetes Secret, never hardcode.
+# ══════════════════════════════════════════════════════════════════════════════
+
+global:
+  # How long to wait before re-sending a resolved notification
+  resolve_timeout: 5m
+  # Slack webhook URL pulled from env in production
+  # Set via: --set alertmanager.config.global.slack_api_url=<url>
+  slack_api_url: 'https://hooks.slack.com/services/CHANGE_ME/CHANGE_ME/CHANGE_ME'
+
+# ── Routing tree ──────────────────────────────────────────────────────────────
+route:
+  group_by: ['alertname', 'namespace', 'severity']
+  group_wait:      30s   # wait before sending first notification in a group
+  group_interval:  5m    # wait before sending another notification for the same group
+  repeat_interval: 4h    # wait before resending an unresolved alert
+  receiver: 'slack-warnings'
+
+  routes:
+    # Critical alerts → #incidents immediately
+    - match:
+        severity: critical
+      receiver: 'slack-critical'
+      group_wait:     10s
+      repeat_interval: 1h
+      continue: false
+
+    # Warning alerts → #alerts channel
+    - match:
+        severity: warning
+      receiver: 'slack-warnings'
+      continue: false
+
+    # Info / test alerts → low-noise channel
+    - match:
+        severity: info
+      receiver: 'slack-info'
+      repeat_interval: 24h
+
+# ── Inhibition rules ──────────────────────────────────────────────────────────
+# Suppress warning alerts when a critical alert for the same instance is firing.
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+
+# ── Receivers ─────────────────────────────────────────────────────────────────
+receivers:
+
+  - name: 'slack-critical'
+    slack_configs:
+      - channel: '#incidents'
+        send_resolved: true
+        icon_emoji: ':rotating_light:'
+        username: 'AlertManager'
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        title: |
+          {{ if eq .Status "firing" }}🔴 CRITICAL{{ else }}✅ RESOLVED{{ end }}: {{ .GroupLabels.alertname }}
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Severity:* `{{ .Labels.severity }}`
+          *Namespace:* `{{ .Labels.namespace }}`
+          *Description:* {{ .Annotations.description }}
+          {{ if .Annotations.runbook }}*Runbook:* `{{ .Annotations.runbook }}`{{ end }}
+          {{ end }}
+        actions:
+          - type: button
+            text: 'View in Prometheus'
+            url: 'http://prometheus:9090/alerts'
+
+  - name: 'slack-warnings'
+    slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        icon_emoji: ':warning:'
+        username: 'AlertManager'
+        color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+        title: |
+          {{ if eq .Status "firing" }}🟡 WARNING{{ else }}✅ RESOLVED{{ end }}: {{ .GroupLabels.alertname }}
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* `{{ .Labels.severity }}`
+          {{ end }}
+
+  - name: 'slack-info'
+    slack_configs:
+      - channel: '#monitoring'
+        send_resolved: false
+        icon_emoji: ':information_source:'
+        username: 'AlertManager'
+        title: 'ℹ️ {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}

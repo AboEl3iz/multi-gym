@@ -1,0 +1,86 @@
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "🚀 Deployment Approval Request",
+        "emoji": true
+      }
+    },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Service:*\n`{{APP_NAME}}`" },
+        { "type": "mrkdwn", "text": "*Version:*\n`{{IMAGE_TAG}}`" },
+        { "type": "mrkdwn", "text": "*Environment:*\nProduction" },
+        { "type": "mrkdwn", "text": "*Triggered by:*\n`{{GIT_COMMITTER}}`" },
+        { "type": "mrkdwn", "text": "*Branch:*\n`{{BRANCH_NAME}}`" },
+        { "type": "mrkdwn", "text": "*Image:*\n`{{FULL_IMAGE}}`" }
+      ]
+    },
+    { "type": "divider" },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "{{RISK_EMOJI}} *AI Risk Assessment:* `{{AI_RISK_LEVEL}}` _(🤖 AI-generated — human review required before acting)_\n\n_AI Summary:_\n{{AI_SUMMARY}}"
+      }
+    },
+    { "type": "divider" },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "📊 *Scan Results:*\n• OWASP Dependency-Check: ✅ Passed ({{OWASP_DEP_COUNT}} dependencies, 0 critical)\n• SonarQube Quality Gate: ✅ Passed\n• Trivy Image Scan: ✅ No HIGH/CRITICAL CVEs"
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "📝 *Commits in this release:*\n{{COMMITS_LIST}}"
+      }
+    },
+    { "type": "divider" },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "⏰ *Auto-reject in:* 4 hours\n<{{BUILD_URL}}|View Jenkins Build #{{BUILD_NUMBER}}>"
+      }
+    },
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "style": "primary",
+          "text": { "type": "plain_text", "text": "✅ Approve", "emoji": true },
+          "action_id": "deploy_approve",
+          "value": "APPROVE|{{BUILD_NUMBER}}|{{IMAGE_TAG}}"
+        },
+        {
+          "type": "button",
+          "style": "danger",
+          "text": { "type": "plain_text", "text": "🚫 Reject", "emoji": true },
+          "action_id": "deploy_reject",
+          "value": "REJECT|{{BUILD_NUMBER}}|{{IMAGE_TAG}}",
+          "confirm": {
+            "title":   { "type": "plain_text", "text": "Confirm Rejection" },
+            "text":    { "type": "mrkdwn",     "text": "Are you sure you want to *reject* this deployment?" },
+            "confirm": { "type": "plain_text", "text": "Yes, Reject" },
+            "deny":    { "type": "plain_text", "text": "Cancel" }
+          }
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "ℹ️ More Info", "emoji": true },
+          "action_id": "deploy_info",
+          "value": "INFO|{{BUILD_NUMBER}}|{{IMAGE_TAG}}",
+          "url": "{{BUILD_URL}}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,269 @@
+# ════════════════════════════════════════════════════════════════════════════
+#  Gym Helm Chart — Default Values
+#  Stage 4: Helm Chart Construction
+#
+#  Production patterns enforced in templates:
+#    • Resource requests + limits on every container
+#    • Liveness, readiness, and startup probes
+#    • PodDisruptionBudget (minAvailable: 1)
+#    • Non-root user  (securityContext.runAsNonRoot: true)
+#    • Read-only root filesystem where possible
+#    • Rolling update strategy (maxSurge:1, maxUnavailable:0)
+#    • No plaintext secrets in this file — use external Secret provider
+#
+#  Override order (lowest → highest precedence):
+#    values.yaml → values-local.yaml (Minikube) → values-prod.yaml → --set
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── Chart naming ─────────────────────────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""
+
+# ── Namespace ─────────────────────────────────────────────────────────────────
+namespace: gym-app
+
+# ── ServiceAccount ────────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  APPLICATION (Node.js / Gym API)
+# ══════════════════════════════════════════════════════════════════════════════
+app:
+  replicaCount: 2
+
+  image:
+    repository: aboelaiz/gym
+    # ← The CD pipeline (stage 3e) patches this value via yq before every deploy
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  # ── Rolling update strategy ─────────────────────────────────────────────────
+  # maxUnavailable: 0 = zero downtime; maxSurge: 1 = one extra pod at a time
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  # ── Resource guardrails (required in every container) ──────────────────────
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "300m"
+
+  # ── Probes ──────────────────────────────────────────────────────────────────
+  # startup:   gives the container extra time to initialise before liveness kicks in
+  # liveness:  restarts the container if it becomes unhealthy
+  # readiness: removes pod from Service endpoints until it is ready to serve traffic
+  probes:
+    startup:
+      enabled: true
+      path: /health
+      port: 3001
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      failureThreshold: 12 # 12 × 5s = 60 s max startup window
+    liveness:
+      enabled: true
+      path: /health
+      port: 3001
+      initialDelaySeconds: 0 # startup probe takes care of warm-up
+      periodSeconds: 15
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      path: /health
+      port: 3001
+      initialDelaySeconds: 0
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+  # ── Pod security context (pod-level) ───────────────────────────────────────
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # ── Container security context (container-level) ───────────────────────────
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # ── Writable tmp mounts (needed because root fs is read-only) ──────────────
+  tmpMounts:
+    - name: tmp
+      mountPath: /tmp
+    - name: app-logs
+      mountPath: /app/logs
+
+  # ── Service ─────────────────────────────────────────────────────────────────
+  service:
+    type: ClusterIP
+    port: 3001
+    # nodePort used only when service.type=NodePort (values-local.yaml)
+    nodePort: ""
+
+  # ── Runtime environment (non-secret config) ─────────────────────────────────
+  env:
+    nodeEnv: "production"
+    logLevel: "info"
+
+  # ── Annotations ─────────────────────────────────────────────────────────────
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3001"
+    prometheus.io/path: "/metrics"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DATABASE (PostgreSQL)
+# ══════════════════════════════════════════════════════════════════════════════
+db:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+
+  strategy:
+    type: Recreate # DB must never have two running instances (data corruption risk)
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+  probes:
+    liveness:
+      enabled: true
+      # pg_isready is the idiomatic PostgreSQL health check
+      command: ["pg_isready", "-U", "postgres"]
+      initialDelaySeconds: 30
+      periodSeconds: 15
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      command: ["pg_isready", "-U", "postgres"]
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      failureThreshold: 5
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999 # postgres official image UID
+    runAsGroup: 999
+    fsGroup: 999
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false # postgres writes to /var/lib/postgresql
+    capabilities:
+      drop:
+        - ALL
+
+  service:
+    type: ClusterIP
+    port: 5432
+
+  # ── Persistence ─────────────────────────────────────────────────────────────
+  # emptyDir: true  → data lost on pod restart (dev/test only)
+  # pvc:            → persistent storage (production)
+  storage:
+    emptyDir: true
+    pvc:
+      enabled: false
+      storageClass: ""
+      size: 10Gi
+      accessMode: ReadWriteOnce
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  NON-SECRET CONFIG (mounted via ConfigMap)
+# ══════════════════════════════════════════════════════════════════════════════
+config:
+  dbHost: "" # Leave empty to use the dynamically generated in-cluster DB service name
+  dbPort: "5432"
+  dbUser: "postgres"
+  dbName: "gym"
+  emailUser: "k.hassan202077@gmail.com"
+  port: "3001"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECRETS
+#  ⚠️  DO NOT put real values here — use an external secret manager or
+#      override with:  helm install gym ./helm/gym \
+#                         --set secrets.postgresPassword="$(kubectl get secret ...)"
+#  Values here are BASE64-encoded by Helm's toJson | b64enc pipeline.
+#  In production, use External Secrets Operator or Vault Agent.
+# ══════════════════════════════════════════════════════════════════════════════
+secrets:
+  # These are placeholder strings — override at install time, never commit real values
+  postgresPassword: "CHANGE_ME_POSTGRES"
+  jwtSecret: "CHANGE_ME_JWT"
+  emailPassword: "CHANGE_ME_EMAIL"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  INGRESS
+# ══════════════════════════════════════════════════════════════════════════════
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: gym.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: gym-tls-secret
+      hosts:
+        - gym.local
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HORIZONTAL POD AUTOSCALER
+# ══════════════════════════════════════════════════════════════════════════════
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  POD DISRUPTION BUDGET
+#  Ensures at least 1 replica is always available during voluntary disruptions
+#  (node drains, rolling updates, cluster upgrades).
+# ══════════════════════════════════════════════════════════════════════════════
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MONITORING (Prometheus ServiceMonitor)
+# ══════════════════════════════════════════════════════════════════════════════
+monitoring:
+  serviceMonitor:
+    enabled: false # set to true when kube-prometheus-stack is installed
+    namespace: monitoring
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics

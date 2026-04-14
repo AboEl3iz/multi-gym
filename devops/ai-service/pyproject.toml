@@ -1,0 +1,19 @@
+[project]
+name = "ai-service"
+version = "0.1.0"
+description = "AI DevOps Service — LLM-powered CI/CD pipeline analysis engine"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.34,<0.35",
+    "pydantic-settings>=2.0,<3.0",
+    "httpx>=0.28,<0.29",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",   # also used in tests via TestClient
+]

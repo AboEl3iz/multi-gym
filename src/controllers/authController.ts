@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { User } from '../entities/User';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import { logger } from '../logger';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
@@ -28,6 +29,9 @@ export const login = async (req: Request, res: Response) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ message: 'Invalid credentials' });
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '1d' });
+    
+    logger.info('User logged in successfully', { userId: user.id, role: user.role, event: 'user_login' });
+    
     res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err: any) {
     res.status(500).json({ message: 'Login failed', error: err.message });
@@ -58,6 +62,9 @@ export const registerMember = async (req: Request, res: Response) => {
     const hashed = await bcrypt.hash(password, 10);
     const user = User.create({ name, email, password: hashed, role: 'Member' });
     await user.save();
+    
+    logger.info('New Member registered', { userId: user.id, role: user.role, event: 'user_register' });
+    
     res.status(201).json({ id: user.id, name: user.name, email: user.email, role: user.role });
   } catch (err: any) {
     res.status(500).json({ message: 'Registration failed', error: err.message });

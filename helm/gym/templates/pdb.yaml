@@ -1,0 +1,17 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gym.fullname" . }}-app
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+spec:
+  # minAvailable: 1 ensures at least one replica is always running during
+  # voluntary disruptions (node drains, rolling updates, cluster upgrades).
+  # This prevents total downtime when an admin runs `kubectl drain`.
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "gym.app.selectorLabels" . | nindent 6 }}
+{{- end }}

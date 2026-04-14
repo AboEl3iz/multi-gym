@@ -1,0 +1,92 @@
+# ════════════════════════════════════════════════════════════════════════════
+#  values-prod.yaml — Production cluster overrides
+#
+#  Usage: helm upgrade --install gym ./helm/gym \
+#           -f helm/gym/values.yaml \
+#           -f helm/gym/values-prod.yaml \
+#           --set secrets.postgresPassword="$(kubectl get secret ...)"
+#
+#  All secrets are overridden at deploy time — never stored here.
+#  In production, use External Secrets Operator or Vault Agent Injector.
+# ════════════════════════════════════════════════════════════════════════════
+
+app:
+  replicaCount: 3           # HA: 3 replicas survive a node failure + PDB
+
+  image:
+    pullPolicy: Always      # always pull to catch :latest updates (CD sets versioned tags)
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "150m"
+    limits:
+      memory: "768Mi"
+      cpu: "500m"
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3001"
+    prometheus.io/path: "/metrics"
+    # Force pod re-roll on ConfigMap change (checksum annotation injected by Helm)
+    checksum/config: ""    # populated dynamically by deployment template
+
+db:
+  storage:
+    emptyDir: false
+    pvc:
+      enabled: true
+      storageClass: "standard"   # replace with your CSI driver (e.g. gp3 on EKS)
+      size: 20Gi
+      accessMode: ReadWriteOnce
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: api.gym.example.com     # ← replace with your real domain
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: gym-prod-tls
+      hosts:
+        - api.gym.example.com
+
+hpa:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 2         # at least 2 replicas survive any voluntary disruption
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    interval: 15s
+    scrapeTimeout: 10s

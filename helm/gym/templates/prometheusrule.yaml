@@ -1,0 +1,107 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+# ══════════════════════════════════════════════════════════════════════════════
+#  PrometheusRule CRD — Stage 6
+#  Installs the alert rules into the kube-prometheus-stack operator.
+#  Enabled only when monitoring.serviceMonitor.enabled=true (values-prod.yaml).
+# ══════════════════════════════════════════════════════════════════════════════
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "gym.fullname" . }}-alerts
+  namespace: {{ .Values.monitoring.serviceMonitor.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+    # Required label for kube-prometheus-stack to pick up this rule
+    release: kube-prometheus-stack
+    app: kube-prometheus-stack
+spec:
+  groups:
+
+    # ── Application HTTP health ──────────────────────────────────────────────
+    - name: {{ include "gym.fullname" . }}.http
+      rules:
+        - alert: GymHighErrorRate
+          expr: |
+            rate(http_request_duration_seconds_count{code=~"5.."}[1m])
+            /
+            rate(http_request_duration_seconds_count[1m]) > 0.05
+          for: 1m
+          labels:
+            severity: critical
+            app: {{ include "gym.name" . }}
+          annotations:
+            summary: "High HTTP 5xx error rate — {{ "{{" }} $labels.instance {{ "}}" }}"
+            description: >-
+              The 5xx error rate exceeded 5% for 1+ minutes.
+              Current: {{ "{{" }} $value | printf "%.2f" {{ "}}" }}.
+            runbook: "kubectl logs -l app.kubernetes.io/component=app -n {{ .Values.namespace }} --tail=200"
+
+        - alert: GymHighLatencyP99
+          expr: |
+            histogram_quantile(0.99,
+              rate(http_request_duration_seconds_bucket[5m])
+            ) > 1.0
+          for: 3m
+          labels:
+            severity: warning
+            app: {{ include "gym.name" . }}
+          annotations:
+            summary: "P99 HTTP latency > 1s — {{ "{{" }} $labels.instance {{ "}}" }}"
+            description: "P99 latency is {{ "{{" }} $value | printf \"%.3f\" {{ "}}" }}s."
+
+    # ── Pod health ────────────────────────────────────────────────────────────
+    - name: {{ include "gym.fullname" . }}.pods
+      rules:
+        - alert: GymPodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{
+              namespace="{{ .Values.namespace }}"
+            }[5m]) > 0
+          for: 2m
+          labels:
+            severity: critical
+            app: {{ include "gym.name" . }}
+          annotations:
+            summary: "Pod {{ "{{" }} $labels.pod {{ "}}" }} is crash-looping"
+            description: >-
+              Container '{{ "{{" }} $labels.container {{ "}}" }}' has been restarting
+              continuously in namespace {{ .Values.namespace }}.
+            runbook: "kubectl logs {{ "{{" }} $labels.pod {{ "}}" }} -n {{ .Values.namespace }} --previous"
+
+        - alert: GymPodNotReady
+          expr: |
+            kube_pod_status_ready{
+              condition="true",
+              namespace="{{ .Values.namespace }}"
+            } == 0
+          for: 3m
+          labels:
+            severity: warning
+            app: {{ include "gym.name" . }}
+          annotations:
+            summary: "Pod {{ "{{" }} $labels.pod {{ "}}" }} is not ready"
+            description: "Pod has been in non-ready state for 3+ minutes."
+
+    # ── Resource usage ────────────────────────────────────────────────────────
+    - name: {{ include "gym.fullname" . }}.resources
+      rules:
+        - alert: GymHighMemoryUsage
+          expr: |
+            container_memory_working_set_bytes{
+              namespace="{{ .Values.namespace }}",
+              container="gym-app"
+            }
+            /
+            container_spec_memory_limit_bytes{
+              namespace="{{ .Values.namespace }}",
+              container="gym-app"
+            } > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            app: {{ include "gym.name" . }}
+          annotations:
+            summary: "Memory usage > 85% in {{ "{{" }} $labels.pod {{ "}}" }}"
+            description: "OOMKill risk. Usage: {{ "{{" }} $value | printf \"%.1f\" {{ "}}" }}%."
+
+{{- end }}

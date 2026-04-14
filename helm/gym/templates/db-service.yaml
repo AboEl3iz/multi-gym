@@ -1,0 +1,20 @@
+{{- if .Values.db.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gym.fullname" . }}-db
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db
+spec:
+  type: ClusterIP
+  clusterIP: None   # Headless — ensures stable DNS for single-replica stateful DB
+  selector:
+    {{- include "gym.db.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      protocol: TCP
+      port: {{ .Values.db.service.port }}
+      targetPort: postgres
+{{- end }}

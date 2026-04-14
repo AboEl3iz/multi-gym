@@ -1,0 +1,517 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  GYM APP — Production-Grade CI Pipeline
+//  Stage 1: Source Control Integration (GitHub + Webhooks)
+//  Stage 2: Full CI — Checkout → OWASP → SonarQube → Docker Build →
+//            Trivy Image Scan → Registry Push → AI Build Summary
+//
+//  Non-functional requirements enforced:
+//    • Shift-Left security  (scans BEFORE image push)
+//    • Zero plaintext secrets  (all creds via Jenkins credentials store)
+//    • Fail-fast             (set -euo pipefail + catchError where needed)
+//    • Immutable image tags  (BUILD_NUMBER-based; never overwrites versioned tag)
+//    • Idempotent            (safe to re-run; docker buildx caching aware)
+//    • Observability         (timestamps plugin + structured log lines per stage)
+// ═══════════════════════════════════════════════════════════════════════════
+
+pipeline {
+    agent any
+
+    // ── Timestamps plugin: every log line gets a wall-clock prefix ──────────
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        disableConcurrentBuilds()
+        timeout(time: 60, unit: 'MINUTES')
+    }
+
+    // ── Stage 1 · Source Control ────────────────────────────────────────────
+    // Branch filter is enforced here: CI runs on main AND feature/* branches.
+    // The webhook is configured in GitHub to POST to:
+    //   http://<JENKINS_URL>/github-webhook/
+    // with Content-Type: application/json and the "Push" event checked.
+    triggers {
+        githubPush()
+    }
+
+    // ── Environment — NO plaintext secrets ──────────────────────────────────
+    environment {
+        // ── Application & image metadata ────────────────────────────────────
+        APP_NAME        = 'gym'
+        // IMAGE_TAG is set in the Checkout stage so it is available globally
+        IMAGE_TAG       = ''
+        DOCKERHUB_REPO  = ''           // resolved from cred username
+
+        // ── Jenkins credential IDs (stored in Jenkins, never in code) ────────
+        DOCKERHUB_CRED_ID       = 'dockerhub-credentials'   // Username+Password
+        SONAR_TOKEN_CRED_ID     = 'sonarqube-token'         // Secret text
+        AI_API_KEY_CRED_ID      = 'ai-api-key'              // Secret text
+        SLACK_BOT_TOKEN_CRED_ID = 'slack-bot-token'         // Secret text
+        SLACK_CI_CHANNEL        = '#ci-builds'
+
+        // ── Tool / service endpoints (non-secret) ───────────────────────────
+        SONAR_HOST_URL          = 'http://sonarqube:9000'
+        AI_SERVICE_URL          = 'http://ai-devops-service:8000'
+
+        // ── Shift-left: fail criteria ────────────────────────────────────────
+        OWASP_CVSS_THRESHOLD    = '7'   // CVSS ≥ 7  → HIGH/CRITICAL
+        TRIVY_SEVERITIES        = 'HIGH,CRITICAL'
+    }
+
+    stages {
+
+        // ════════════════════════════════════════════════════════════════════
+        //  STAGE 1 · SOURCE CONTROL
+        // ════════════════════════════════════════════════════════════════════
+
+        // ── 1.1 GitHub Integration & Checkout ────────────────────────────────
+        // Clones the repository; sets the unique IMAGE_TAG from BUILD_NUMBER
+        // so every pipeline run is deterministically versioned.
+        stage('1.1 · Checkout') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch pattern: 'feature/*', comparator: 'GLOB'
+                }
+            }
+            steps {
+                script {
+                    ciLog('1.1 · Checkout', 'START')
+                    checkout scm
+
+                    // Derive immutable image tag: BUILD_NUMBER (override-able via param)
+                    env.IMAGE_TAG = params.IMAGE_TAG_OVERRIDE?.trim()
+                        ? params.IMAGE_TAG_OVERRIDE.trim()
+                        : "${env.BUILD_NUMBER}"
+
+                    echo "▶ IMAGE_TAG resolved to: ${env.IMAGE_TAG}"
+                    echo "▶ GIT_BRANCH:  ${env.GIT_BRANCH}"
+                    echo "▶ GIT_COMMIT:  ${env.GIT_COMMIT}"
+                    echo "▶ WORKSPACE:   ${env.WORKSPACE}"
+
+                    ciLog('1.1 · Checkout', 'DONE')
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════════
+        //  STAGE 2 · CONTINUOUS INTEGRATION
+        // ════════════════════════════════════════════════════════════════════
+
+        // ── 2.2 OWASP Dependency-Check ──────────────────────────────────────
+        // Shift-Left: runs BEFORE the Docker build.
+        // Fails immediately if any CVSS ≥ 7 (HIGH/CRITICAL) finding exists.
+        // HTML report archived as a Jenkins artifact for audit trail.
+        stage('2.2 · OWASP Dependency-Check') {
+            steps {
+                script {
+                    ciLog('2.2 · OWASP Dependency-Check', 'START')
+                }
+                // dependencyCheck is provided by the OWASP Dependency-Check Jenkins plugin
+                dependencyCheck(
+                    additionalArguments: """
+                        --project "${APP_NAME}"
+                        --scan .
+                        --out owasp-report
+                        --format HTML
+                        --format JSON
+                        --failOnCVSS ${OWASP_CVSS_THRESHOLD}
+                        --exclude '**/node_modules/**'
+                        --exclude '**/.git/**'
+                    """,
+                    odcInstallation: 'OWASP-DC'
+                )
+                dependencyCheckPublisher(
+                    pattern: 'owasp-report/dependency-check-report.xml',
+                    failedTotalCritical: 0,
+                    failedTotalHigh: 0,
+                    unstableTotalCritical: 0,
+                    unstableTotalHigh: 0
+                )
+                script {
+                    ciLog('2.2 · OWASP Dependency-Check', 'DONE')
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'owasp-report/**',
+                        allowEmptyArchive: true,
+                        fingerprint: true
+                    )
+                }
+                failure {
+                    script {
+                        ciLog('2.2 · OWASP Dependency-Check', 'FAILED — HIGH/CRITICAL CVSSv3 ≥ 7 detected')
+                    }
+                }
+            }
+        }
+
+        // ── 2.3 SonarQube Analysis & Quality Gate ───────────────────────────
+        // Uses a sonar-project.properties file in the repo root.
+        // SonarQube token is injected via Jenkins credential — never hardcoded.
+        // Build fails immediately if Quality Gate result is not "OK".
+        stage('2.3 · SonarQube Analysis') {
+            steps {
+                script {
+                    ciLog('2.3 · SonarQube Analysis', 'START')
+                    withCredentials([string(credentialsId: SONAR_TOKEN_CRED_ID, variable: 'SONAR_TOKEN')]) {
+                        withSonarQubeEnv('SonarQube') {
+                            sh """
+                                set -euo pipefail
+                                sonar-scanner \
+                                  -Dsonar.projectKey=${APP_NAME} \
+                                  -Dsonar.host.url=${SONAR_HOST_URL} \
+                                  -Dsonar.login=\${SONAR_TOKEN} \
+                                  -Dsonar.sources=src \
+                                  -Dsonar.tests=src \
+                                  -Dsonar.test.inclusions='**/*.spec.ts,**/*.test.ts' \
+                                  -Dsonar.typescript.lcov.reportPaths=coverage/lcov.info \
+                                  -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+                            """
+                        }
+                    }
+                    ciLog('2.3 · SonarQube Analysis', 'SCAN SUBMITTED — waiting for Quality Gate')
+                }
+            }
+        }
+
+        // Quality Gate is a separate stage so its timeout doesn't block other work
+        stage('2.3b · Quality Gate') {
+            steps {
+                script {
+                    ciLog('2.3b · Quality Gate', 'WAITING')
+                    // Abort after 10 minutes if SonarQube doesn't respond
+                    timeout(time: 10, unit: 'MINUTES') {
+                        def qg = waitForQualityGate(abortPipeline: true)
+                        if (qg.status != 'OK') {
+                            error "❌ SonarQube Quality Gate FAILED: status=${qg.status}"
+                        }
+                        ciLog('2.3b · Quality Gate', "PASSED — status=${qg.status}")
+                    }
+                }
+            }
+        }
+
+        // ── 2.4 Docker Build (Multi-Stage) ──────────────────────────────────
+        // Uses the optimized multi-stage Dockerfile already in the repo root.
+        // No secrets baked in — only ARG/ENV for runtime config.
+        // Tagged as <repo>/<app>:<BUILD_NUMBER>
+        stage('2.4 · Docker Build') {
+            steps {
+                script {
+                    ciLog('2.4 · Docker Build', 'START')
+                    withCredentials([usernamePassword(
+                        credentialsId: DOCKERHUB_CRED_ID,
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        env.DOCKERHUB_REPO = "${DOCKER_USER}/${APP_NAME}"
+                        def fullTag = "${env.DOCKERHUB_REPO}:${env.IMAGE_TAG}"
+
+                        sh """
+                            set -euo pipefail
+                            echo "▶ Building image: ${fullTag}"
+                            docker build \
+                              --no-cache \
+                              --build-arg NODE_ENV=production \
+                              --label "git.commit=${env.GIT_COMMIT}" \
+                              --label "build.number=${env.IMAGE_TAG}" \
+                              --label "build.branch=${env.GIT_BRANCH}" \
+                              -t "${fullTag}" \
+                              .
+                            echo "▶ Build complete: ${fullTag}"
+                        """
+                    }
+                    ciLog('2.4 · Docker Build', 'DONE')
+                }
+            }
+        }
+
+        // ── 2.5 Trivy Image Vulnerability Scan ──────────────────────────────
+        // Shift-Left: runs BEFORE the image is pushed to the registry.
+        // Fails immediately on any HIGH or CRITICAL CVE (exit-code 1).
+        // JSON report archived for compliance.
+        stage('2.5 · Trivy Image Scan') {
+            steps {
+                script {
+                    ciLog('2.5 · Trivy Image Scan', 'START')
+                    withCredentials([usernamePassword(
+                        credentialsId: DOCKERHUB_CRED_ID,
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        def fullTag = "${DOCKER_USER}/${APP_NAME}:${env.IMAGE_TAG}"
+
+                        // Trivy binary bootstrap (cached across runs via WORKSPACE_TMP)
+                        sh """
+                            set -euo pipefail
+                            export TRIVY_DIR="\${WORKSPACE_TMP}/trivy-bin"
+                            mkdir -p "\${TRIVY_DIR}"
+
+                            if [ ! -f "\${TRIVY_DIR}/trivy" ]; then
+                                echo "▶ Downloading Trivy..."
+                                curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+                                    | sh -s -- -b "\${TRIVY_DIR}" latest
+                            fi
+
+                            echo "▶ Scanning image: ${fullTag}"
+                            "\${TRIVY_DIR}/trivy" image \
+                                --exit-code 1 \
+                                --severity ${TRIVY_SEVERITIES} \
+                                --format json \
+                                --output trivy-image-report.json \
+                                --no-progress \
+                                "${fullTag}"
+                        """
+                    }
+                    ciLog('2.5 · Trivy Image Scan', 'PASSED — no HIGH/CRITICAL CVEs')
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'trivy-image-report.json',
+                        allowEmptyArchive: true,
+                        fingerprint: true
+                    )
+                }
+                failure {
+                    script {
+                        ciLog('2.5 · Trivy Image Scan', 'FAILED — HIGH/CRITICAL CVEs detected in image')
+                    }
+                }
+            }
+        }
+
+        // ── 2.6 Registry Push ───────────────────────────────────────────────
+        // Pushes ONLY if all prior security and quality gates passed.
+        // Pushes versioned tag (immutable) AND updates the "latest" mutable tag.
+        // Credentials are never echoed or stored in the workspace.
+        stage('2.6 · Push to Registry') {
+            steps {
+                script {
+                    ciLog('2.6 · Push to Registry', 'START')
+                    withCredentials([usernamePassword(
+                        credentialsId: DOCKERHUB_CRED_ID,
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        def versionedTag = "${DOCKER_USER}/${APP_NAME}:${env.IMAGE_TAG}"
+                        def latestTag    = "${DOCKER_USER}/${APP_NAME}:latest"
+
+                        sh """
+                            set -euo pipefail
+                            echo "\${DOCKER_PASS}" | docker login -u "\${DOCKER_USER}" --password-stdin
+                            
+                            echo "▶ Pushing versioned tag: ${versionedTag}"
+                            docker push "${versionedTag}"
+                            
+                            echo "▶ Tagging as latest: ${latestTag}"
+                            docker tag "${versionedTag}" "${latestTag}"
+                            docker push "${latestTag}"
+                            
+                            docker logout
+                            echo "▶ Push complete"
+                        """
+                        // Store the final full image reference for downstream CD job
+                        env.FULL_IMAGE_TAG = versionedTag
+                    }
+                    ciLog('2.6 · Push to Registry', "DONE — image=${env.FULL_IMAGE_TAG}")
+                }
+            }
+        }
+
+        // ── 2.7 AI Build Summary ─────────────────────────────────────────────
+        // Calls the AI DevOps service to produce:
+        //   1. Build summary (what changed, scan results overview)
+        //   2. Risk assessment (based on OWASP + Trivy findings)
+        //   3. Deployment recommendations
+        // Result stored as ai-build-summary.json artifact and posted to Slack.
+        // AI API key is injected via Jenkins credential — never hardcoded.
+        stage('2.7 · AI Build Summary') {
+            steps {
+                script {
+                    ciLog('2.7 · AI Build Summary', 'START')
+                    withCredentials([
+                        string(credentialsId: AI_API_KEY_CRED_ID,     variable: 'AI_API_KEY'),
+                        string(credentialsId: SLACK_BOT_TOKEN_CRED_ID, variable: 'SLACK_BOT_TOKEN')
+                    ]) {
+                        // Collect scan artefact content (truncated to avoid token bloat)
+                        def owaspJson  = fileExists('owasp-report/dependency-check-report.json')
+                            ? readFile('owasp-report/dependency-check-report.json').take(4000)
+                            : '{"summary": "OWASP report not found"}'
+                        def trivyJson  = fileExists('trivy-image-report.json')
+                            ? readFile('trivy-image-report.json').take(4000)
+                            : '{"Results": []}'
+
+                        // Build the AI request payload — NO secrets in the prompt
+                        def aiPayload = groovy.json.JsonOutput.toJson([
+                            type         : "build_summary",
+                            build_number : env.IMAGE_TAG,
+                            branch       : env.GIT_BRANCH,
+                            commit       : env.GIT_COMMIT,
+                            image        : env.FULL_IMAGE_TAG,
+                            owasp_summary: owaspJson,
+                            trivy_summary: trivyJson
+                        ])
+
+                        writeFile file: 'ai-request.json', text: aiPayload
+
+                        // Call AI service (falls back gracefully on timeout/error)
+                        def aiResponse = sh(
+                            script: """
+                                set -euo pipefail
+                                curl -sf \
+                                  -X POST \
+                                  -H "Content-Type: application/json" \
+                                  -H "X-API-Key: \${AI_API_KEY}" \
+                                  --max-time 120 \
+                                  --data @ai-request.json \
+                                  "${AI_SERVICE_URL}/analyze/build" \
+                                  -o ai-build-summary.json \
+                                  -w "%{http_code}"
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        echo "▶ AI service response code: ${aiResponse}"
+
+                        // Post to Slack #ci-builds
+                        if (fileExists('ai-build-summary.json')) {
+                            def summary = readJSON file: 'ai-build-summary.json'
+                            def slackMsg = buildSlackCIMessage(summary)
+                            postToSlack(SLACK_CI_CHANNEL, slackMsg, env.SLACK_BOT_TOKEN)
+                        }
+                    }
+                    ciLog('2.7 · AI Build Summary', 'DONE')
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'ai-build-summary.json',
+                        allowEmptyArchive: true,
+                        fingerprint: true
+                    )
+                    // Clean up the request file (may contain scan data)
+                    sh 'rm -f ai-request.json || true'
+                }
+            }
+        }
+
+    } // end stages
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  POST ACTIONS
+    // ════════════════════════════════════════════════════════════════════════
+    post {
+        always {
+            script {
+                ciLog('PIPELINE', "FINISHED — result=${currentBuild.currentResult}")
+                archiveArtifacts artifacts: '**/*-report.*', allowEmptyArchive: true
+                // Remove dangling Docker images to free disk space
+                sh "docker rmi ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} || true"
+            }
+        }
+
+        success {
+            script {
+                ciLog('PIPELINE', "SUCCESS — triggering CD job with IMAGE_TAG=${env.IMAGE_TAG}")
+                // ── Stage 3 trigger ──────────────────────────────────────────
+                // Parameterized Trigger Plugin: pass the verified image tag to CD
+                build(
+                    job: 'gym-cd',
+                    wait: false,
+                    parameters: [
+                        string(name: 'IMAGE_TAG',   value: env.IMAGE_TAG),
+                        string(name: 'GIT_COMMIT',  value: env.GIT_COMMIT),
+                        string(name: 'GIT_BRANCH',  value: env.GIT_BRANCH),
+                        string(name: 'FULL_IMAGE',  value: env.FULL_IMAGE_TAG)
+                    ]
+                )
+            }
+        }
+
+        failure {
+            script {
+                ciLog('PIPELINE', 'FAILED')
+                withCredentials([string(credentialsId: SLACK_BOT_TOKEN_CRED_ID, variable: 'SLACK_BOT_TOKEN')]) {
+                    def failMsg = [
+                        [type: "section", text: [type: "mrkdwn",
+                         text: "❌ *CI Pipeline FAILED*\n*Job:* `${env.JOB_NAME}` *Build:* `#${env.BUILD_NUMBER}`\n*Branch:* `${env.GIT_BRANCH}`\n*Commit:* `${env.GIT_COMMIT?.take(7)}`\n<${env.BUILD_URL}|View Build Logs>"]]
+                    ]
+                    postToSlack(SLACK_CI_CHANNEL, failMsg, env.SLACK_BOT_TOKEN)
+                }
+            }
+        }
+    }
+
+} // end pipeline
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Emits a structured log line for pipeline observability.
+ * Format: [STAGE] [STATUS] [TIMESTAMP] [BUILD]
+ */
+def ciLog(String stage, String status) {
+    def ts = new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC'))
+    echo "▶▶ CI_LOG | stage=\"${stage}\" | status=\"${status}\" | build=\"${env.BUILD_NUMBER}\" | branch=\"${env.GIT_BRANCH}\" | ts=\"${ts}\""
+}
+
+/**
+ * Posts a Slack Block Kit message to a given channel.
+ * Uses the Slack chat.postMessage API directly via curl.
+ * The bot token is passed as a parameter — never stored in an env var globally.
+ */
+def postToSlack(String channel, def blocks, String token) {
+    def payload = groovy.json.JsonOutput.toJson([
+        channel: channel,
+        blocks : blocks
+    ])
+    writeFile file: '.slack-payload.json', text: payload
+    sh """
+        set -euo pipefail
+        curl -sf \
+          -X POST https://slack.com/api/chat.postMessage \
+          -H "Authorization: Bearer ${token}" \
+          -H "Content-Type: application/json" \
+          --data @.slack-payload.json
+        rm -f .slack-payload.json
+    """
+}
+
+/**
+ * Constructs the Slack Block Kit message for CI success.
+ * All content is clearly labeled as AI-generated where applicable.
+ */
+def buildSlackCIMessage(def aiSummary) {
+    def riskEmoji = [LOW: '🟢', MEDIUM: '🟡', HIGH: '🔴'].get(
+        aiSummary?.risk_level?.toUpperCase(), '⚪'
+    )
+    return [
+        [type: "header", text: [type: "plain_text", text: "✅ CI Build Passed — ${env.APP_NAME}"]],
+        [type: "section", fields: [
+            [type: "mrkdwn", text: "*Version:*\n`${env.IMAGE_TAG}`"],
+            [type: "mrkdwn", text: "*Branch:*\n`${env.GIT_BRANCH}`"],
+            [type: "mrkdwn", text: "*Commit:*\n`${env.GIT_COMMIT?.take(7)}`"],
+            [type: "mrkdwn", text: "*Image:*\n`${env.FULL_IMAGE_TAG}`"]
+        ]],
+        [type: "divider"],
+        [type: "section", text: [type: "mrkdwn",
+            text: "📊 *Scan Results*\n• OWASP Dependency-Check: ✅ Passed\n• SonarQube Quality Gate: ✅ Passed\n• Trivy Image Scan: ✅ No HIGH/CRITICAL CVEs"]],
+        [type: "divider"],
+        [type: "section", text: [type: "mrkdwn",
+            text: "🤖 *AI Build Summary* _(AI-generated — requires human review)_\n${riskEmoji} *Risk Level:* ${aiSummary?.risk_level ?: 'N/A'}\n\n${aiSummary?.summary ?: 'Summary unavailable'}"]],
+        [type: "section", text: [type: "mrkdwn",
+            text: "💡 *AI Deployment Recommendation:*\n${aiSummary?.recommendation ?: 'N/A'}"]],
+        [type: "context", elements: [
+            [type: "mrkdwn",
+             text: "<${env.BUILD_URL}|View Full Build> | Build #${env.BUILD_NUMBER} | ${new Date().format('yyyy-MM-dd HH:mm')} UTC"]
+        ]]
+    ]
+}

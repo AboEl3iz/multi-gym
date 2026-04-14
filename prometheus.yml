@@ -1,0 +1,59 @@
+global:
+  scrape_interval:     15s  # Production default; docker-compose local uses 5s override
+  evaluation_interval: 15s
+  scrape_timeout:      10s
+
+# ── Alertmanager ──────────────────────────────────────────────────────────────
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+# ── Alert rule files ──────────────────────────────────────────────────────────
+rule_files:
+  - '/etc/prometheus/alerts.yml'
+
+# ── Scrape configurations ─────────────────────────────────────────────────────
+scrape_configs:
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Gym Node.js API — exposes /metrics (prom-client)
+  - job_name: 'gym-app'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['app:3001']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'gym-api'
+
+  # PostgreSQL (via postgres_exporter)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'gym-postgres'
+
+  # AI DevOps Service (docker-compose local)
+  - job_name: 'ai-devops-service'
+    metrics_path: '/health'   # returns 200; replace with /metrics when added
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['ai-devops-service:8000']
+
+  # cAdvisor — container resource metrics (CPU/mem per container)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Node Exporter — host-level metrics (optional; add container to compose)
+  # - job_name: 'node-exporter'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']

@@ -1,0 +1,297 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+# ══════════════════════════════════════════════════════════════════════════════
+#  Grafana Dashboard ConfigMap — Stage 6
+#  Provisioned automatically by Grafana's sidecar when the label
+#  grafana_dashboard: "1" is present (kube-prometheus-stack default).
+# ══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gym.fullname" . }}-grafana-dashboard
+  namespace: {{ .Values.monitoring.serviceMonitor.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+    grafana_dashboard: "1"    # triggers Grafana sidecar auto-import
+data:
+  gym-dashboard.json: |
+    {
+      "__inputs": [],
+      "__requires": [],
+      "annotations": { "list": [] },
+      "description": "Gym API — Application & Infrastructure Observability",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 100,
+          "title": "📊 HTTP Traffic",
+          "type": "row"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "unit": "reqps",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 100 },
+                  { "color": "red",    "value": 500 }
+                ]
+              }
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+          "id": 1,
+          "options": { "tooltip": { "mode": "single" } },
+          "targets": [
+            {
+              "expr": "rate(http_request_duration_seconds_count[1m])",
+              "legendFormat": "req/s — {{ "{{" }}instance{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Request Rate (req/s)",
+          "type": "timeseries"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green",  "value": null },
+                  { "color": "yellow", "value": 0.01 },
+                  { "color": "red",    "value": 0.05 }
+                ]
+              },
+              "mappings": []
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+          "id": 2,
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            {
+              "expr": "rate(http_request_duration_seconds_count{code=~\"5..\"}[1m]) / rate(http_request_duration_seconds_count[1m])",
+              "legendFormat": "5xx Error Rate",
+              "refId": "A"
+            }
+          ],
+          "title": "HTTP 5xx Error Rate",
+          "type": "gauge"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green",  "value": null },
+                  { "color": "yellow", "value": 0.5 },
+                  { "color": "red",    "value": 1.0 }
+                ]
+              }
+            }
+          },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+          "id": 3,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "P50 latency",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "P95 latency",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "P99 latency",
+              "refId": "C"
+            }
+          ],
+          "title": "Response Latency Percentiles (P50 / P95 / P99)",
+          "type": "timeseries"
+        },
+
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+          "id": 101,
+          "title": "🏗️ Pod & Container Resources",
+          "type": "row"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+          "id": 4,
+          "targets": [
+            {
+              "expr": "container_memory_working_set_bytes{namespace=\"{{ .Values.namespace }}\", container=\"gym-app\"}",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }} — working set",
+              "refId": "A"
+            },
+            {
+              "expr": "container_spec_memory_limit_bytes{namespace=\"{{ .Values.namespace }}\", container=\"gym-app\"}",
+              "legendFormat": "Memory limit",
+              "refId": "B"
+            }
+          ],
+          "title": "Container Memory (Working Set vs Limit)",
+          "type": "timeseries"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+          "id": 5,
+          "targets": [
+            {
+              "expr": "kube_pod_container_status_restarts_total{namespace=\"{{ .Values.namespace }}\"}",
+              "legendFormat": "{{ "{{" }}pod{{ "}}" }} restarts",
+              "refId": "A"
+            }
+          ],
+          "title": "Pod Restart Count",
+          "type": "timeseries"
+        },
+
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+          "id": 102,
+          "title": "🗄️ PostgreSQL",
+          "type": "row"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green",  "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red",    "value": 90 }
+                ]
+              }
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+          "id": 6,
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            {
+              "expr": "pg_stat_activity_count",
+              "legendFormat": "Active connections",
+              "refId": "A"
+            }
+          ],
+          "title": "PostgreSQL Active Connections",
+          "type": "gauge"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+          "id": 7,
+          "targets": [
+            {
+              "expr": "rate(pg_stat_database_tup_fetched[1m])",
+              "legendFormat": "Rows fetched/s — {{ "{{" }}datname{{ "}}" }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Row Fetch Rate",
+          "type": "timeseries"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bool",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red",   "value": 0 },
+                  { "color": "green", "value": 1 }
+                ]
+              }
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
+          "id": 8,
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            {
+              "expr": "pg_up",
+              "legendFormat": "PostgreSQL Up",
+              "refId": "A"
+            }
+          ],
+          "title": "PostgreSQL Status",
+          "type": "stat"
+        },
+
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+          "id": 103,
+          "title": "🚨 Active Alerts",
+          "type": "row"
+        },
+
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 36 },
+          "id": 9,
+          "targets": [
+            {
+              "expr": "ALERTS{alertstate=\"firing\"}",
+              "legendFormat": "{{ "{{" }}alertname{{ "}}" }} [{{ "{{" }}severity{{ "}}" }}]",
+              "refId": "A"
+            }
+          ],
+          "title": "Currently Firing Alerts",
+          "type": "table"
+        }
+
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "tags": ["gym", "devsecops", "api"],
+      "templating": { "list": [] },
+      "time": { "from": "now-3h", "to": "now" },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Gym App — DevSecOps Dashboard",
+      "uid": "gym-devsecops-001",
+      "version": 1
+    }
+{{- end }}

@@ -1,0 +1,68 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gym-app
+  namespace: argocd
+  # Labels for filtering in the ArgoCD UI
+  labels:
+    app: gym
+    env: production
+    team: platform
+  # Finalizer ensures ArgoCD deletes cluster resources when this manifest is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # ── The project this Application belongs to (RBAC boundary) ──────────────
+  project: default
+
+  # ── Source: GitOps repository ─────────────────────────────────────────────
+  # ArgoCD watches the `main` branch for changes to the Helm chart.
+  # The CD pipeline (Jenkinsfile.cd stage 3e) patches helm/gym/values.yaml
+  # and pushes to main, which ArgoCD detects and syncs automatically.
+  source:
+    repoURL: https://github.com/AboEl3iz/gym.git    # ← replace with your repo
+    targetRevision: main                              # GitOps branch
+    path: helm/gym                                    # Helm chart directory
+    helm:
+      # Values files applied in order (later files override earlier ones)
+      valueFiles:
+        - values.yaml
+      # In-line override: ArgoCD will substitute the image tag from the
+      # value in values.yaml (set by the CD pipeline)
+      parameters: []
+
+  # ── Destination: Kubernetes cluster ──────────────────────────────────────
+  destination:
+    server: https://kubernetes.default.svc   # in-cluster (Minikube)
+    namespace: gym-app
+
+  # ── Sync policy ──────────────────────────────────────────────────────────
+  syncPolicy:
+    # Automated sync: ArgoCD detects git changes and syncs automatically.
+    # The Jenkins CD pipeline also calls `argocd app sync --force` explicitly
+    # in stage 3f to guarantee immediate sync after the GitOps commit.
+    automated:
+      prune: true     # Remove orphaned K8s resources when deleted from Helm
+      selfHeal: true  # Revert any manual out-of-band kubectl changes
+
+    syncOptions:
+      - CreateNamespace=true     # Creates gym-app namespace if missing
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true           # Delete old resources after new ones are healthy
+      - RespectIgnoreDifferences=true
+
+    # Retry on transient failures (network blips, apiserver restarts)
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m
+
+  # ── Ignore differences (managed externally) ──────────────────────────────
+  ignoreDifferences:
+    # HPA scales replicas dynamically — ignore diff to prevent ArgoCD fighting the HPA
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

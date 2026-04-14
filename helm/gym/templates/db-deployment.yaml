@@ -1,0 +1,106 @@
+{{- if .Values.db.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gym.fullname" . }}-db
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db
+spec:
+  replicas: {{ .Values.db.replicaCount }}
+
+  # ── Recreate strategy for stateful DB ────────────────────────────────────
+  # Prevents two Postgres instances writing to the same volume simultaneously.
+  strategy:
+    type: {{ .Values.db.strategy.type }}
+
+  selector:
+    matchLabels:
+      {{- include "gym.db.selectorLabels" . | nindent 6 }}
+
+  template:
+    metadata:
+      labels:
+        {{- include "gym.db.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+
+    spec:
+      serviceAccountName: {{ include "gym.serviceAccountName" . }}
+      automountServiceAccountToken: false
+
+      securityContext:
+        {{- toYaml .Values.db.podSecurityContext | nindent 8 }}
+
+      containers:
+        - name: postgres
+          image: {{ include "gym.db.image" . | quote }}
+          imagePullPolicy: {{ .Values.db.image.pullPolicy }}
+
+          securityContext:
+            {{- toYaml .Values.db.securityContext | nindent 12 }}
+
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.db.service.port }}
+              protocol: TCP
+
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "gym.fullname" . }}-config
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gym.fullname" . }}-secrets
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "gym.fullname" . }}-config
+                  key: DB_NAME
+            # Store WAL and data in the mounted volume, not the container layer
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          resources:
+            {{- toYaml .Values.db.resources | nindent 12 }}
+
+          # ── Liveness probe ──────────────────────────────────────────────────
+          {{- if .Values.db.probes.liveness.enabled }}
+          livenessProbe:
+            exec:
+              command: {{ toJson .Values.db.probes.liveness.command }}
+            initialDelaySeconds: {{ .Values.db.probes.liveness.initialDelaySeconds }}
+            periodSeconds:       {{ .Values.db.probes.liveness.periodSeconds }}
+            failureThreshold:    {{ .Values.db.probes.liveness.failureThreshold }}
+          {{- end }}
+
+          # ── Readiness probe ─────────────────────────────────────────────────
+          {{- if .Values.db.probes.readiness.enabled }}
+          readinessProbe:
+            exec:
+              command: {{ toJson .Values.db.probes.readiness.command }}
+            initialDelaySeconds: {{ .Values.db.probes.readiness.initialDelaySeconds }}
+            periodSeconds:       {{ .Values.db.probes.readiness.periodSeconds }}
+            failureThreshold:    {{ .Values.db.probes.readiness.failureThreshold }}
+          {{- end }}
+
+          volumeMounts:
+            - name: db-storage
+              mountPath: /var/lib/postgresql/data
+
+      volumes:
+        - name: db-storage
+          {{- if .Values.db.storage.pvc.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "gym.fullname" . }}-db-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+      terminationGracePeriodSeconds: 60
+{{- end }}

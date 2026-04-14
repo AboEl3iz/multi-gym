@@ -1,0 +1,19 @@
+{
+  "venvPath": "devops/ai-service",
+  "venv": ".venv",
+  "extraPaths": [
+    "devops/ai-service",
+    "devops/ai-service/.venv/lib/python3.12/site-packages"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "devops/ai-service",
+      "venvPath": "devops/ai-service",
+      "venv": ".venv",
+      "extraPaths": [
+        "devops/ai-service",
+        "devops/ai-service/.venv/lib/python3.12/site-packages"
+      ]
+    }
+  ]
+}

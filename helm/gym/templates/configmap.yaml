@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gym.fullname" . }}-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+data:
+  DB_HOST:    {{ default (printf "%s-db" (include "gym.fullname" .)) .Values.config.dbHost | quote }}
+  DB_PORT:    {{ .Values.config.dbPort    | quote }}
+  DB_USER:    {{ .Values.config.dbUser    | quote }}
+  DB_NAME:    {{ .Values.config.dbName    | quote }}
+  EMAIL_USER: {{ .Values.config.emailUser | quote }}
+  PORT:       {{ .Values.config.port      | quote }}
+  LOG_LEVEL:  {{ .Values.app.env.logLevel | quote }}
+  NODE_ENV:   {{ .Values.app.env.nodeEnv  | quote }}

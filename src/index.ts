@@ -1,3 +1,6 @@
+import './tracing';
+import { logger } from './logger';
+import { metricsMiddleware, register } from './metrics';
 import 'reflect-metadata';
 import express from 'express';
 import { createConnection } from 'typeorm';
@@ -16,7 +19,18 @@ import swaggerSpec from './config/swagger';
 dotenv.config();
 
 const app = express();
+app.use(metricsMiddleware);
 app.use(express.json());
+
+app.get('/metrics', async (req, res) => {
+  try {
+    res.setHeader('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  } catch (ex) {
+    res.status(500).end(ex);
+  }
+});
+
 app.use('/', routes);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
@@ -71,9 +85,9 @@ createConnection(ormconfig)
   .then(() => {
     const PORT = process.env.PORT || 3000;
     server.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+      logger.info(`Server running on port ${PORT}`);
     });
   })
   .catch((error) => {
-    console.error('Database connection error:', error);
+    logger.error('Database connection error:', { error });
   }); 

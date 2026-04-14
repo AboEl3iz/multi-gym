@@ -1,0 +1,16 @@
+# ── AI DevOps Service — Python Dependencies ───────────────────────────────────
+# Pin major versions; patch versions can float for security fixes.
+# Run `pip-compile requirements.in` to regenerate with exact pins.
+
+# Web framework
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+
+# Config / settings management
+pydantic-settings==2.*
+
+# Async HTTP client (used by all LLM provider implementations)
+httpx==0.28.*
+
+# JSON parsing hardening (stdlib json is fine; this is a fallback)
+# (no extra dep needed — stdlib json used throughout)

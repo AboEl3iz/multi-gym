@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gym.fullname" . }}-app
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+  annotations:
+    # Structured deploy annotation for observability
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: {{ .Values.app.replicaCount }}
+
+  # ── Rolling update — zero downtime ─────────────────────────────────────────
+  strategy:
+    type: {{ .Values.app.strategy.type }}
+    {{- if eq .Values.app.strategy.type "RollingUpdate" }}
+    rollingUpdate:
+      maxSurge:       {{ .Values.app.strategy.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ .Values.app.strategy.rollingUpdate.maxUnavailable }}
+    {{- end }}
+
+  selector:
+    matchLabels:
+      {{- include "gym.app.selectorLabels" . | nindent 6 }}
+
+  template:
+    metadata:
+      labels:
+        {{- include "gym.app.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Force pod re-roll when ConfigMap or Secret changes
+        checksum/config:  {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret:  {{ include (print $.Template.BasePath "/secret.yaml")    . | sha256sum }}
+        {{- with .Values.app.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+    spec:
+      serviceAccountName: {{ include "gym.serviceAccountName" . }}
+      automountServiceAccountToken: false
+
+      # ── Pod-level security context ──────────────────────────────────────────
+      securityContext:
+        {{- toYaml .Values.app.podSecurityContext | nindent 8 }}
+
+      # ── Init container: wait for the database to be ready ──────────────────
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ default (printf "%s-db" (include "gym.fullname" .)) .Values.config.dbHost }} {{ .Values.config.dbPort }}; do
+                echo "Waiting for database at {{ default (printf "%s-db" (include "gym.fullname" .)) .Values.config.dbHost }}:{{ .Values.config.dbPort }}..."
+                sleep 2
+              done
+              echo "Database is reachable."
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534   # nobody
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "32Mi"
+              cpu: "50m"
+
+      containers:
+        - name: gym-app
+          image: {{ include "gym.app.image" . | quote }}
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+
+          # ── Container-level security context ───────────────────────────────
+          securityContext:
+            {{- toYaml .Values.app.securityContext | nindent 12 }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.app.service.port }}
+              protocol: TCP
+
+          # ── Environment: non-secret config from ConfigMap ─────────────────
+          envFrom:
+            - configMapRef:
+                name: {{ include "gym.fullname" . }}-config
+
+          # ── Environment: secrets from Kubernetes Secret ─────────────────
+          env:
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gym.fullname" . }}-secrets
+                  key: postgres-password
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gym.fullname" . }}-secrets
+                  key: jwt-secret
+            - name: EMAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gym.fullname" . }}-secrets
+                  key: email-password
+
+          # ── Resource guardrails ────────────────────────────────────────────
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+
+          # ── Startup probe (gives app time to start before liveness fires) ──
+          {{- if .Values.app.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.app.probes.startup.path }}
+              port: {{ .Values.app.probes.startup.port }}
+            initialDelaySeconds: {{ .Values.app.probes.startup.initialDelaySeconds }}
+            periodSeconds:       {{ .Values.app.probes.startup.periodSeconds }}
+            failureThreshold:    {{ .Values.app.probes.startup.failureThreshold }}
+          {{- end }}
+
+          # ── Liveness probe (restarts unhealthy pods) ───────────────────────
+          {{- if .Values.app.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.app.probes.liveness.path }}
+              port: {{ .Values.app.probes.liveness.port }}
+            initialDelaySeconds: {{ .Values.app.probes.liveness.initialDelaySeconds }}
+            periodSeconds:       {{ .Values.app.probes.liveness.periodSeconds }}
+            timeoutSeconds:      {{ .Values.app.probes.liveness.timeoutSeconds }}
+            failureThreshold:    {{ .Values.app.probes.liveness.failureThreshold }}
+          {{- end }}
+
+          # ── Readiness probe (removes pod from load balancer until ready) ───
+          {{- if .Values.app.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.app.probes.readiness.path }}
+              port: {{ .Values.app.probes.readiness.port }}
+            initialDelaySeconds: {{ .Values.app.probes.readiness.initialDelaySeconds }}
+            periodSeconds:       {{ .Values.app.probes.readiness.periodSeconds }}
+            timeoutSeconds:      {{ .Values.app.probes.readiness.timeoutSeconds }}
+            failureThreshold:    {{ .Values.app.probes.readiness.failureThreshold }}
+          {{- end }}
+
+          # ── Volume mounts (tmp + logs — needed for read-only root fs) ──────
+          volumeMounts:
+            {{- range .Values.app.tmpMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+            {{- end }}
+
+      # ── Volumes ─────────────────────────────────────────────────────────────
+      volumes:
+        {{- range .Values.app.tmpMounts }}
+        - name: {{ .name }}
+          emptyDir: {}
+        {{- end }}
+
+      # ── Scheduling constraints ───────────────────────────────────────────
+      # Spread replicas across nodes for high availability
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "gym.app.selectorLabels" . | nindent 14 }}
+
+      # Graceful shutdown: give Node.js 30s to drain in-flight requests
+      terminationGracePeriodSeconds: 30

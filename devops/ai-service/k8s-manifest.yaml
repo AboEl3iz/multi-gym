@@ -1,0 +1,229 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  AI DevOps Service — Kubernetes Manifests
+#
+#  Namespace: devops   (separate from the app namespace gym-app)
+#
+#  Resources created:
+#    • Namespace
+#    • Secret         (LLM API keys — filled in at deploy time)
+#    • ConfigMap      (non-secret tuning)
+#    • Deployment     (2 replicas, non-root, readOnly root fs)
+#    • Service        (ClusterIP — only reachable from Jenkins + pipelines)
+#
+#  Deploy:
+#    kubectl apply -f devops/ai-service/k8s-manifest.yaml
+#    kubectl set env deployment/ai-devops-service \
+#      -n devops OPENAI_API_KEY=sk-... LLM_PROVIDER=openai
+# ══════════════════════════════════════════════════════════════════════════════
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devops
+  labels:
+    app.kubernetes.io/managed-by: kubectl
+    purpose: ci-cd-tooling
+
+---
+# ── Non-secret configuration ─────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-devops-config
+  namespace: devops
+data:
+  LLM_PROVIDER:      "mock"           # Change to openai / gemini / ollama in prod
+  LLM_MODEL:         "gpt-4o-mini"
+  LLM_TIMEOUT_SEC:   "90"
+  LOG_LEVEL:         "INFO"
+  ENABLE_DOCS:       "false"          # Disable Swagger UI in production
+  MAX_INPUT_TOKENS:  "6000"
+  MAX_OUTPUT_TOKENS: "1024"
+  WORKERS:           "2"
+
+---
+# ── Secrets (override these at deploy time — never commit real values) ────────
+# In production, use External Secrets Operator + HashiCorp Vault / AWS SM.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ai-devops-secrets
+  namespace: devops
+type: Opaque
+stringData:
+  OPENAI_API_KEY: "CHANGE_ME"       # sk-... from OpenAI
+  GEMINI_API_KEY: "CHANGE_ME"       # AIza... from Google AI Studio
+  API_KEY:        "CHANGE_ME"       # Shared secret sent by Jenkins as X-API-Key
+
+---
+# ── PodDisruptionBudget ───────────────────────────────────────────────────────
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-devops-service-pdb
+  namespace: devops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ai-devops-service
+
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-devops-service
+  namespace: devops
+  labels:
+    app: ai-devops-service
+    version: "1.0.0"
+    part-of: gym-devsecops-pipeline
+spec:
+  replicas: 2
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  selector:
+    matchLabels:
+      app: ai-devops-service
+
+  template:
+    metadata:
+      labels:
+        app: ai-devops-service
+      annotations:
+        prometheus.io/scrape: "false"     # Enable when /metrics is added
+        checksum/config: ""               # Populated by helm if managed via Helm
+    spec:
+      # ── Security: don't mount the default service account token ──────────
+      automountServiceAccountToken: false
+
+      # ── Pod-level security ───────────────────────────────────────────────
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: ai-devops-service
+          image: aboelaiz/ai-devops-service:1.0.0
+          imagePullPolicy: IfNotPresent
+
+          # ── Container-level security ──────────────────────────────────────
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          # ── Config from ConfigMap ─────────────────────────────────────────
+          envFrom:
+            - configMapRef:
+                name: ai-devops-config
+
+          # ── Secrets individually (avoid mounting whole secret as env) ─────
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-devops-secrets
+                  key: OPENAI_API_KEY
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-devops-secrets
+                  key: GEMINI_API_KEY
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-devops-secrets
+                  key: API_KEY
+
+          # ── Resource guardrails ───────────────────────────────────────────
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+          # ── Probes ────────────────────────────────────────────────────────
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12    # 60 s startup window
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # ── Writable tmp (for httpx temp files etc.) ──────────────────────
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # ── Spread across nodes for HA ────────────────────────────────────────
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ai-devops-service
+
+      terminationGracePeriodSeconds: 30
+
+---
+# ── Service (ClusterIP — internal only) ───────────────────────────────────────
+# Accessed by Jenkins pipelines as:
+#   http://ai-devops-service.devops.svc.cluster.local:8000
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-devops-service
+  namespace: devops
+  labels:
+    app: ai-devops-service
+spec:
+  type: ClusterIP
+  selector:
+    app: ai-devops-service
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

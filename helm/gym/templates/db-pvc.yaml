@@ -1,0 +1,20 @@
+{{- if .Values.db.storage.pvc.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gym.fullname" . }}-db-pvc
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "gym.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep   # do NOT delete PVC on helm uninstall
+spec:
+  accessModes:
+    - {{ .Values.db.storage.pvc.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.db.storage.pvc.size }}
+  {{- if .Values.db.storage.pvc.storageClass }}
+  storageClassName: {{ .Values.db.storage.pvc.storageClass }}
+  {{- end }}
+{{- end }}

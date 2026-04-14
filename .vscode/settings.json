@@ -1,0 +1,8 @@
+{
+  "python.defaultInterpreterPath": "/media/karim/New Volume1/nodejs/gym/devops/ai-service/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "/media/karim/New Volume1/nodejs/gym/devops/ai-service",
+    "/media/karim/New Volume1/nodejs/gym/devops/ai-service/.venv/lib/python3.12/site-packages"
+  ],
+  "python.analysis.typeCheckingMode": "basic"
+}

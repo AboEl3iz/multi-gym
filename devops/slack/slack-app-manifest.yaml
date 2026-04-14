@@ -1,0 +1,64 @@
+display_name: Gym DevOps Slack App
+display_information:
+  name: Gym DevOps Bot
+  description: CI/CD deployment approval and notifications for the Gym application pipeline
+  background_color: "#1a1a2e"
+  long_description: |
+    The Gym DevOps Bot provides interactive deployment approval workflows,
+    real-time build notifications, and AI-generated deployment summaries 
+    directly in Slack. Engineers can approve or reject production deployments
+    from the #deploy-approvals channel without leaving Slack.
+
+features:
+  bot_user:
+    display_name: Gym DevOps Bot
+    always_online: true
+
+  interactivity:
+    is_enabled: true
+    # The request_url receives button-click payloads from Slack.
+    # Route: https://<your-webhook-receiver-domain>/slack/actions
+    # Local (Minikube): Use `kubectl port-forward` + ngrok for testing.
+    # Production: expose via Kubernetes Ingress with TLS.
+    request_url: https://YOUR_WEBHOOK_RECEIVER_DOMAIN/slack/actions
+
+oauth_config:
+  # Scopes required for all pipeline features
+  scopes:
+    bot:
+      # Post messages and interactive Block Kit messages
+      - chat:write
+      - chat:write.public
+
+      # Read channel info (optional — for channel verification)
+      - channels:read
+
+      # Send ephemeral messages (acknowledgements to button clicks)
+      - chat:write.customize
+
+      # React to messages with emoji (optional status indicators)
+      - reactions:write
+
+      # View workspace users (for approver display names in audit)
+      - users:read
+
+settings:
+  event_subscriptions:
+    bot_events:
+      # Optional: react to mentions in channels
+      - app_mention
+
+  interactivity:
+    is_enabled: true
+
+  org_deploy_enabled: false
+  socket_mode_enabled: false   # use HTTP request_url (production-grade)
+  token_rotation_enabled: false
+
+# ── Channels the bot should join by default ────────────────────────────────
+# After install, invite the bot: /invite @gym-devops-bot
+# Required channels:
+#   #ci-builds         - CI build notifications and AI summaries
+#   #deploy-approvals  - Interactive deployment approval gate
+#   #deployments       - Post-deployment summaries and anomaly alerts
+#   #alerts            - Prometheus/Alertmanager alerts (Stage 6)

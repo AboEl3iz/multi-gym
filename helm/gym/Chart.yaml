@@ -1,0 +1,15 @@
+apiVersion: v2
+name: gym
+description: Production-grade Helm chart for the Gym Management Node.js API
+type: application
+version: 0.2.0
+appVersion: "1.0.0"
+keywords:
+  - gym
+  - nodejs
+  - api
+  - postgresql
+home: https://github.com/AboEl3iz/gym
+maintainers:
+  - name: Karim
+    email: k.hassan202077@gmail.com

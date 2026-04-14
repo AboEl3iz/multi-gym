@@ -1,0 +1,35 @@
+# ── Stage 1: Build ────────────────────────────────────────────────────────
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /build
+
+# Copy only the single source file — no go.mod needed (stdlib only)
+COPY webhook-receiver.go .
+
+# Initialize a minimal module so `go build` is happy
+RUN go mod init webhook-receiver
+
+# Compile: strip debug info (-s -w) → minimal binary size
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o webhook-receiver .
+
+# ── Stage 2: Distroless runtime ───────────────────────────────────────────
+# gcr.io/distroless/static-debian12 has NO shell, NO package manager,
+# NO libc — smallest possible attack surface (~2MB base).
+FROM gcr.io/distroless/static-debian12
+
+LABEL org.opencontainers.image.title="Gym Slack Webhook Receiver"
+LABEL org.opencontainers.image.description="HMAC-validated Slack interactive webhook handler for Jenkins CD approval"
+
+# Required env vars (injected at runtime via Kubernetes Secret):
+#   SLACK_SIGNING_SECRET, JENKINS_URL, JENKINS_USER,
+#   JENKINS_TOKEN, SLACK_BOT_TOKEN
+ENV PORT=5000 \
+    CD_JOB_NAME=gym-cd
+
+COPY --from=builder /build/webhook-receiver /webhook-receiver
+
+EXPOSE 5000
+
+# Liveness probe endpoint: GET /health
+ENTRYPOINT ["/webhook-receiver"]

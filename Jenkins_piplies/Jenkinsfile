@@ -75,11 +75,7 @@ pipeline {
 
                 stage('Dependency Scanning (Trivy)') {
                     steps {
-                        // Jenkins runs inside Docker (DooD). When a sibling container is spawned
-                        // with -v "$WORKSPACE":/project, the host daemon cannot resolve the
-                        // /var/jenkins_home/... path — it lives only inside the Jenkins container.
-                        // Solution: download the Trivy binary and run it directly in the Jenkins
-                        // shell so it scans the workspace without any volume mount.
+                        
                         retry(3) {
                              sh '''
             # Set up Trivy binary directory
